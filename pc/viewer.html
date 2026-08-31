@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MC800S Camera</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#111418;color:#f2f5f5;font:14px 'Segoe UI',sans-serif;letter-spacing:0}
+main{height:100%;display:grid;grid-template-rows:auto minmax(0,1fr)}
+header{display:flex;gap:16px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 16px;background:#202428;border-bottom:1px solid #3d4448}
+strong{font-size:15px}#status{color:#79d5b2;font-variant-numeric:tabular-nums}#status.stale{color:#ffb1a0}
+#view{min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}img{width:100%;height:100%;object-fit:contain;min-height:0}
+</style>
+</head>
+<body><main><header><strong>MC800S</strong><span id="status">Connecting</span></header><div id="view"><img id="camera" alt=""></div></main>
+<script>
+const img=document.querySelector('#camera'), status=document.querySelector('#status');
+let frameId='',currentUrl='',lastNew=0,shown=[];
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function receive(){
+  while(true){
+    const control=new AbortController(), timer=setTimeout(()=>control.abort(),1800);
+    try{
+      const response=await fetch('/latest.jpg?after='+frameId,{cache:'no-store',signal:control.signal});
+      if(response.status===204)continue;
+      if(!response.ok)throw Error('camera unavailable');
+      const nextId=response.headers.get('X-Frame-Id');
+      const blob=await response.blob();
+      if(nextId===frameId)continue;
+      const nextUrl=URL.createObjectURL(blob), next=new Image();
+      next.src=nextUrl;
+      try{await Promise.race([next.decode(),pause(1000).then(()=>{throw Error('decode timeout')})]);}
+      catch(error){URL.revokeObjectURL(nextUrl);throw error;}
+      img.src=nextUrl;
+      if(currentUrl)URL.revokeObjectURL(currentUrl);
+      currentUrl=nextUrl;frameId=nextId;lastNew=performance.now();
+      shown.push(lastNew);shown=shown.filter(t=>t>lastNew-5000);
+    }catch(error){await pause(150);}
+    finally{clearTimeout(timer);}
+  }
+}
+setInterval(()=>{
+  const now=performance.now(),recent=shown.filter(t=>t>now-5000),age=lastNew?(now-lastNew)/1000:Infinity;
+  const hz=recent.length>1?(recent.length-1)*1000/(recent.at(-1)-recent[0]):0;
+  const stale=age>1;
+  status.className=stale?'stale':'';
+  status.textContent=lastNew?`${img.naturalWidth} x ${img.naturalHeight} | ${hz.toFixed(1)} Hz | ${stale?'STALE ':''}${age.toFixed(1)} s`:'Connecting';
+},250);
+receive();
+</script></body></html>

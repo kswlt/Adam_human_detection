@@ -1,0 +1,102 @@
+# 板端修复记录（2026-08-31）
+
+本次范围：偶发图像停顿、config_file、配置持久化、雷达运行中断流恢复。保持原生1920×1080 JPEG；不修改IMU业务，不执行30分钟验收。
+
+## 实现
+
+### 相机
+
+- 删除手写HTTP状态机，改为libcurl 8.21.0的持久easy handle。支持连接复用、大小写无关响应头、chunked、服务端Connection:close和断线后重新连接。
+- 单次GET总期限350ms，连接阶段最多150ms；失败不在同一帧重试两次，短暂退避后取新帧。不通过重复旧图补帧率。相机若主动关闭连接，客户端不能强制它Keep-Alive。
+- 获取线程与发布线程分离，队列最多3帧；过期排队帧不再发出。全部调度使用steady_clock，不累积恢复后的追赶任务。
+- 记录HTTP总耗时/首字节耗时/新建连接数、排队、Protobuf编码、Zenoh put耗时以及失败计数。修正队列长度读的数据竞争，忽略SIGPIPE避免网络关闭导致进程退出。
+- JPEG不解码、不改字节、不重编码。仍为ImageMsgArray长度1、format=2、真实JPEG宽高。
+
+### 配置与文件通道
+
+- 板端共享文件：`/userdata/xtapp/config.json`。首次启动时带文件锁创建默认值；已有文件损坏时明确失败，不静默覆盖。
+- setting先完整解析与校验，再整体保存。临时文件写入、fsync、同目录rename、目录fsync；只有保存成功才回读新配置。损坏请求不会半途改变部分字段。
+- 返回码：0成功、1请求解析/参数校验失败、2保存失败；协议没有单独定义“不支持参数”错误码，因此在code=1描述里明确说明。文件系统若在rename后的目录fsync失败，返回保存失败并注明持久性不确定，不能承诺回滚磁盘。
+- 正值字段才更新；支持image_fps 1..10、lidar_fps 1..15、imu_fps配置1..50，JPEG-only image_format=2。拒绝H264格式和正值H264参数；这不代表本轮验收了IMU。
+- 配置保存后服务重新启动生效；回复字段是持久值，parameter中的active是雷达进程启动时加载的配置快照。两服务应一起重启以统一生效。
+- `zenoh`使用协议第9节结构：mode、connect数组、listen数组、scouting.multicast.enabled。额外`camera_zenoh.listen`区分独立相机进程7448；雷达7447。当前pico适配只接受每类最多一个TCP endpoint，超出明确拒绝。多router/多设备不是本轮验收范围。
+- `active/{sn}/config_file`发布顶层FileMsgArray，且提供同名Zenoh queryable供晚加入订阅者按需获取。启动、setting成功保存、获取到真实雷达内参时发布；GET得到当前缓存并触发再次发布。接收者可先订阅再GET。
+- 文件白名单为`config.json`和`lidar_intrinsics.json`；FileMsg.path是逻辑文件名，data是磁盘原字节。单文件64KiB上限，不允许网络指定任意读取路径。配置不包含相机密码。
+- 雷达内参来自当前硬件TCP cmd18。没有真实相机—雷达外参，不生成假的device_calib_info；协议将该名称列作例子，不能因此伪造标定。
+- setting.image_format在协议第6/8节存在冲突；采用第6节2=JPEG并在回复扩展字段中说明。ImageMsg.format=2没有歧义。
+
+### 雷达
+
+- 移除frames==0条件，收到过帧后同样监测断流。超过3秒没有完整有效帧，重连TCP、重新加入组播、stop/setdest/start；有界退避持续重试。每3次TCP已接通却仍未恢复测量，才升级雷达复位；网络未接通不累计该计数，避免插回网线就触发多余复位。复位后重连并重新设置UDP目标。只有真正收到有效帧才宣告恢复。
+- 追查SDK又发现原cmd19将端口按大端发送，而当前硬件使用小端指令协议；7687必须为07 1E，旧代码1E 07实际为1822。修正两处发送路径，统一生成，并用cmd4设备信息读回端口。此前“setdest后必须reset/复位后不可再setdest”的固件推断撤回：它掩盖了端口字节序错误，不能作为硬件特性传播。
+- 该修正仅针对雷达cmd19负载内的端口字段，依据vendor/xtsdk/xtsdk/xtsdk.cpp的setUdpDestIp；正常socket的htons/UDP报文头仍用网络字节序。最终部署已实际读回192.168.0.179:7687，并在启动5秒检查中收到点云，无复位重试。证据：evidence/radar-port-endian-deploy-20260831.txt。
+- 现场断链还发现Linux会删除雷达专用192.168.0.101/32路由，网口恢复后连接错误地走eth1。重连现使用ip的独立参数调用（无shell）检查/补辅助地址，并恢复唯一这一条eth0主机路由；控制socket绑定eth0。不会调用会清防火墙的S98xtnet，不改默认路由或全局转发策略。
+- UDP有可能先于重试定时器自行恢复，从而清掉重试计数，但路由尚未恢复。因此独立于出帧，每5秒只读检查/proc/net/route，缺失时才修复专用路由。正常出帧时不发送额外cmd0、不反复改写正常路由；厂商SDK也只在断流后进行通信检查。
+- 命令响应按厂商SDK区分v1/v2/v3尾部，检查实际返回码；BUSY/REJECT等不能当成功。日志附带硬件原始温度字段与设备状态，便于定位源端异常。
+- TCP连接1500ms期限，单条命令读写共用1500ms总期限，非阻塞socket及MSG_NOSIGNAL；校验响应长度、起止符，错误后关闭失同步连接。
+- UDP先检查总长/偏移再分配；分片覆盖去重、冲突拒绝、旧帧过期。FrameInfo必须是当前SDK结构长度206字节，像素区不能越过元数据；无效包不刷新健康时间。
+- 发布采用累计期限，降低输入帧节拍与5Hz阈值相遇时误跳帧。命令、文件、点云分别计seq。
+- 工厂Lixel.yaml改为只读，不再每次启动截断覆盖。
+- 无消费者的旧UDP点云旁路默认关闭，可通过XT_PC_UDP_MIRROR=1显式启用；原生Zenoh全量点云、preview保留，PC仍显示全部收到的点。
+- 后续将Zenoh发送移出UDP收包线程，点云和原有IMU发布工作进入32项有界队列。队列满丢最旧项，排队超过600ms跳过并计数，seq在入队前分配，丢帧不会被重新编号隐藏。正常情况下保持5Hz和完整有效点集，不改坐标或抽样；严重背压时不能承诺无丢帧。
+- 独立记录capture帧/UDP包/完整帧age，以及queue_drop、expired、put_errors、put_max_ms，可区分传感器断流与发布阻塞。正在发送中的TCP数据无法靠队列撤回，故恢复期仍须用实际订阅测量，不仅检查队列长度。
+- 交换机改线后eth0已无链路，eth1探测雷达3/3成功。新增持久radar_network.interface/source_address与管理命令--network；不再将现场网口永久写死。当前需要eth1/192.168.0.250，cmd19目标同步使用该地址；旧配置缺省兼容eth0/.179。拒绝非法网口名及非单播IPv4，不修改雷达本机IP。
+
+## 构建与回滚
+
+- 使用板端既有xtbuilder（arm64 Ubuntu22.04）及g++11.4/cmake3.22原生构建；未重装或重置Windows WSL/Docker。
+- libcurl使用仅HTTP的静态构建，无SSL依赖；第三方源码与许可证留在vendor。JSON采用nlohmann/json 3.12.0。
+- curl tar.xz SHA256：`aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6`。
+- json.hpp SHA256：`aaf127c04cb31c406e5b04a63f1ae89369fccde6d8fa7cdda1ed4f32dfc5de63`。
+- 构建入口board/build.sh；CROSS留空可原生构建。板端构建输出在容器/tmp/xtbuild，避免占满较小的userdata分区。板端RTC仍1970，构建有时钟偏差警告，不把它误称为实时时钟已修复。
+- 必须用项目vendor/zenoh-pico源码构建FRAG_MAX_SIZE=300000；曾误用板端旧zenoh-pico-main/build（FRAG4096）导致一次真实收包验收失败，已先回滚旧程序再重建。构建脚本现在拒绝不匹配的缓存。相机读任务与租约任务也改成确定的先后启动顺序，不能把那次失败只归因于一个宏。
+- 部署脚本board/deploy_release.sh先创建一次性备份，再替换二进制及对应源码。回滚时停止两个同名服务，从备份恢复二进制/源码；配置格式与新版本绑定，回滚前保留新config.json供后续恢复，不覆盖工厂文件。
+
+### PC订阅恢复与诊断
+
+- pc/gateway.py不再仅因8秒无数据就周期性close/open整个Zenoh会话。沉默时保留订阅，记录stale_events，SDK负责底层TCP重连；确实关闭或抛异常才重建会话。配置connect/timeout_ms=0、exit_on_failure=false支持后台连接。
+- 增加process_max_ms、sdk_log_max_ms、queue_delay_max_ms和HTTP event_loop_lag_max_ms，不清除旧故障计数来包装结果。已部署并由原YunKeAutostart守护运行。
+- 9项PC单元通过。独立恢复测试中，雷达沉默30次发布期间图像继续，HTTP最大3.02ms；真实Zenoh peer停4秒再开启后0.318秒恢复，无应用层会话重建。证据pc-retained-session-recovery-20260831.json。
+- 90秒真实测试：直接图像900帧9.991337Hz/最大212.392ms，Foxglove图像900帧/最大209.585ms；点云450帧约5Hz，两路内容比对0不一致。证据pc-retained-session-live-20260831。该窗口没有自然雷达故障，不能代替故障时隔离验证。
+- 检查官方zenoh-python 1.10.0源码发现close/open的wait释放GIL；“重建会话持有GIL”不成立，真实跨通道停顿原因仍需用分阶段诊断与故障复测确认。
+- 已清理明确识别出的旧相机RTSP能力探测残留进程4113/4118，仅结束这两个已核对命令行的进程，未停止生产xt_camera。证据legacy-rtsp-probe-cleanup-20260831.txt。
+
+## 验证边界
+
+单元测试使用ASan+UBSan：畸形Protobuf、原子保存/拒绝损坏配置、重复/越界UDP、FrameInfo边界、2万组随机输入；HTTP测试验证真实TCP keep-alive复用、chunked、小写头、Connection:close、慢滴流总超时。
+
+### 已完成的相机与配置验证
+
+- 相机1000帧：9.989386Hz，P50 100.0035ms、P95 106.8137ms、P99 109.0710ms、最大194.1405ms。Array长度1、format2、1920×1080全部通过；解析失败、JPEG解码失败、序号缺失、时间戳倒退均为0。证据：evidence/board-final-1000-20260831/image-1000.json。
+- 后一窗口相机1000帧9.890408Hz、最大206.7378ms，完整210秒为9.875293Hz、最大209.4795ms，仍无超过500ms间隔和解析/解码/序号错误。证据：evidence/radar-passive-final-20260831/。必须保留这一较低频率，不能挑最好一轮声称严格10Hz通过；当前是接近10Hz，不降清晰度、不重复旧图补数。
+- 同轮210秒相机2096帧：9.980961Hz，最大203.3365ms，没有超过500ms的间隔。不能把相机通过扩展为同轮雷达通过（见下述失败记录）。
+- 定向丢弃相机HTTP流量5.03秒，解除后自动恢复，xt_camera PID不变；最大接收间隔5.399秒，含人为断网时间。没有清空网关累计错误来掩盖这次故障。测试结束已移除专用防火墙链。证据：evidence/recovery-final-console-20260831.txt及recovery-final-20260831/。
+- 原生JPEG平均大小随现场画面变化，本轮1000帧约128020字节；不再沿用历史85KB。MC800S实测仍主动关闭每个HTTP连接（100次/100条新连接），客户端具有复用能力不等于相机支持Keep-Alive。
+- 网页100帧原始ImageMsgArray/JPEG哈希与解码检查通过，9.9386Hz；网页不做JPEG二次压缩。证据：evidence/board-delivery-final-20260831.json。
+- 配置及config_file共18项通过；4Hz保存、服务重启后active=4，独立订阅4.000468Hz，随后恢复5Hz并复查active=5。只重启服务，未执行整板重启或断电持久性试验。证据：board-config-final-20260831.json、board-config-restart4-20260831.json、board-lidar4-20260831/。
+
+### 雷达中间版本失败记录（不可省略）
+
+e6aefc6版本在6秒网口down/up实验中自动恢复且修复专用路由，PID不变；直接订阅最大间隔8.119秒（含断链）。但随后210秒自然运行只有694帧/3.302688Hz，4次超过500ms间隔，最大23.430秒，硬件复位引起3次源时间戳回退，之后还出现0个有效点的帧。该版本不能判稳定。证据：evidence/board-final-1000-20260831/summary.json、radar-final-instability-20260831.txt。因此进一步移除正常测量中的cmd0与路由反复写入，并补命令状态校验；新版本结果须另列，不覆盖失败证据。
+
+9bf3184中间版本完成210秒：点云1050帧5.000051Hz、最大238.3253ms，1000帧序号/解析/时间戳错误0，Foxglove有效比较窗口无内容不一致。但仍含cmd19端口字节序错误，启动依赖复位恢复，故继续修正，不能用这轮正常段证明恢复路径完整。
+
+fda833e版本7分钟测试失败：直接图像4188帧9.971510Hz、最大296.311ms，格式/解码/序号错误0；雷达1719帧4.230380Hz、最大31.437秒、2次源时间戳回退，结束时已断流13.761秒。Foxglove图像4166帧、最大2078.355ms，4次超过500ms间隔。保留evidence/board-release-steady-20260831及运行日志，不以前1000帧5Hz正常段覆盖整轮失败。
+
+之后新增控制通道异步事件解析、记录、长度限制及分段接收测试。运行中见cmd209启动状态文字，尚无真实非零错误状态证据。测试构造的cmd157/status7/data0c不能当作硬件过热告警。传感器温度与故障相关性尚未证明，不修改硬件保护参数。
+
+用户真实雷达重新供电后，原进程13496恢复，80秒400帧5.000051Hz，P50 200.003/P95 203.936/P99 207.912/最大211.542ms，seq/解析/时间戳错误0；Foxglove有效比较389帧全部一致。当时相机0帧，用户随后确认未供电并补电；原xt_camera11631随后自行恢复1080p约10Hz。用户同时将路由器换为交换机，固定地址不变。证据after-physical-powercycle-20260831；该0帧窗口是断电，不是软件验收通过或网页故障。
+
+短测不能证明无限期稳定；实物恢复已观察但未统一计时，整板重启、30分钟验收和真实相机—雷达联合标定仍需分别验证。
+
+## 最终交换机部署与定向故障
+
+- 雷达二进制97b843f54b8479098e2a7596a521d7eec0c8c7a96ea131e165191b4b17c3f107，PID14084；相机54de65ff保持不变/PID11631。完整当前清单board-switch-manifest-20260831.json共10项，已逐项核对。此前board-release-manifest为历史版本，不覆盖旧测试归属。
+- 控制通道读回UDP目标192.168.0.250:7687、路由eth1/src .250，config.json SHA3a7ceac7。网络配置通过新版xt_radar --network管理入口调用原子保存，不手工拼接JSON，也不改雷达本机IP。更换交换机断开过构建SSH，重新跑完板端测试后才部署。
+- 新版发布队列：32项，阻塞发送不持有队列锁；容量满丢最旧项、600ms过期计数，不隐瞒序号缺失。IMU的业务解析/格式未改，仅同样将其已有发布调用移离收包线程。
+- 12.07秒定向iptables OUTPUT阻断7447到PC .200：规则实际丢506个包/约1372KB。put实测阻塞2471ms并返回一次-100，采集帧数仍持续增长，未进入断流复位；两个服务PID不变。累计expired=9、put_errors=1，queue_drop=0；这些是故障注入结果，不清零。
+- 该100秒接收窗口：图像989帧9.881740Hz，P50 100.275/P95 108.308/P99 151.130/最大231.010ms；Foxglove图像最大230.707ms，无500ms间隔，有效窗口哈希0不一致。雷达431帧4.312965Hz，最大14.023秒、序号缺69帧，解析/时间戳错误0。故障期间不能宣称5Hz无损。证据switch-publish-fault-20260831/summary.json、switch-publish-fault-console-20260831.txt。
+- 配置/文件通道再次18项全通过；config.json506字节，包括radar_network，pub/sub与query的FileMsgArray字节一致。HTTP100帧9.973470Hz、最大200.695ms，JPEG哈希/解码错误0；原始点云文件实际核对15条完整记录。证据switch-config-final-20260831.json、switch-http-delivery-20260831.json。
+- switch-runtime-final-20260831.txt确认测试规则已清除、xtbuilder停止、工厂文件SHA不变。旧tests/board_faults.sh已加专用eth0路由检查，共享交换机拓扑拒绝执行。
+
+依赖参考：[libcurl总超时](https://curl.se/libcurl/c/CURLOPT_TIMEOUT_MS.html)、[连接复用](https://curl.se/libcurl/c/CURLOPT_FORBID_REUSE.html)、[线程/信号处理](https://curl.se/libcurl/c/threadsafe.html)。协议依据为本地原始PDF及evidence/protocol-original.txt。

@@ -1,0 +1,30 @@
+#!/bin/sh
+### S98xtnet - 板子网络配置 (雷达直连 eth0 源IP + IP 转发, 供 PC 经板子访问雷达)
+### 在 S99xtradar / S99xtcamera 之前运行
+case "$1" in
+  start)
+    echo "configuring xt network..."
+    # eth0 加 192.168.0.179/32 (雷达同子网辅助地址)
+    ip addr add 192.168.0.179/32 dev eth0 2>/dev/null
+    # 到雷达的源 IP 必须用 192.168.0.179 (雷达只接受同子网源)
+    ip route replace 192.168.0.101/32 dev eth0 src 192.168.0.179 2>/dev/null
+    # IP 转发 (PC 经板子 eth1->eth0 访问雷达)
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+    echo 1 > /proc/sys/net/ipv4/conf/eth1/proxy_arp
+    echo 1 > /proc/sys/net/ipv4/conf/eth0/proxy_arp
+    echo 0 > /proc/sys/net/ipv4/conf/eth1/rp_filter
+    echo 0 > /proc/sys/net/ipv4/conf/eth0/rp_filter
+    # iptables 放行转发 (Docker 默认 DROP)
+    iptables -P FORWARD ACCEPT 2>/dev/null
+    iptables -F DOCKER-USER 2>/dev/null
+    iptables -I DOCKER-USER -i eth1 -o eth0 -j ACCEPT 2>/dev/null
+    iptables -I DOCKER-USER -i eth0 -o eth1 -j ACCEPT 2>/dev/null
+    echo "xt network configured"
+    ;;
+  stop)
+    ;;
+  *)
+    echo "usage: $0 {start|stop}"
+    ;;
+esac
+exit 0

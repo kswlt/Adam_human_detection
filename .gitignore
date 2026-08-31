@@ -1,0 +1,20 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# 大数据 / 运行产物（不入库）
+archive/
+raw_data/
+runtime/
+evidence/
+vendor/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+*.log

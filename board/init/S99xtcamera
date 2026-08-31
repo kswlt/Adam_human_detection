@@ -1,0 +1,29 @@
+#!/bin/sh
+### S99xtcamera — MC800S IPC 相机数据通道服务 (xt_camera)
+### 依赖 xt_radar 先运行 (zenoh peer 7447)
+case "$1" in
+  start)
+    echo "starting xt_camera..."
+    cd /userdata/xtapp
+    setsid nohup ./xt_camera >> /userdata/xtapp/camera.log 2>&1 &
+    disown
+    sleep 1
+    pid=$(pidof xt_camera)
+    echo "xt_camera pid=$pid"
+    ;;
+  stop)
+    echo "stopping xt_camera..."
+    pkill -f xt_camera
+    sleep 1
+    echo "stopped"
+    ;;
+  restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+  *)
+    echo "usage: $0 {start|stop|restart}"
+    ;;
+esac
+exit 0
