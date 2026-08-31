@@ -4,6 +4,8 @@
 
 **版本区分：下文是板端修复前的基线。后续已部署新板端，最新短测、配置持久化及恢复验证以[BOARD_FIXES](BOARD_FIXES.md)为准。历史失败结果保留，不覆盖。**
 
+最终交换机版本97b843f5：210秒直接接收JPEG2079帧9.895121Hz、点云1050帧5.002429Hz；直接及Foxglove均无500ms以上间隔，接收seq/解析/时间戳/图像解码错误0。另有12秒雷达发送故障注入，自动恢复且图像不停顿，但雷达该故障窗口缺69帧，不称无损。config_file与setting18项通过。用户实际重新供电后两服务曾在原进程自行恢复，未同步测量精确恢复时长。完整分位数、当前拓扑、源文件哈希及限制见BOARD_FIXES最后一节。
+
 ## 1. 测试方法
 
 `tests/audit_live.py` 启动两个独立官方 Zenoh 订阅，不依赖网关计数；生成 Protobuf 解析，Pillow 对每个 JPEG 执行 load()，逐帧检查Array/format/尺寸/SOI/EOI/seq/stamp。并行订阅实际 Foxglove WebSocket，使用其公布的 Protobuf descriptor 解码。

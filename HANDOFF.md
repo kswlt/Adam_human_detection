@@ -52,3 +52,5 @@ PC累计计数包含旧版故障、部署回滚和测试造成的中断/序号�
 12秒只阻断雷达Zenoh到PC的发送测试：实际put阻塞2471ms，UDP采集持续、无复位、两服务PID不变；解除规则后自动恢复。直接点云最大间隔14.023秒，故障窗口seq缺69帧，板端expired=9、put_errors=1，保留这些计数。直接及Foxglove图像最大约231ms、无500ms停顿，内容比对0不一致。证据switch-publish-fault-20260831与对应console；不能将这轮故障数据当正常5Hz/无损测试。
 
 新配置/文件通道18项通过，config.json完整传递radar_network且字节与磁盘一致。HTTP100帧原始ImageMsgArray/JPEG哈希/解码通过，20条上限内实际检查15条完整原始点云记录。证据switch-config-final-20260831.json、switch-http-delivery-20260831.json。防火墙测试规则已清除，xtbuilder已停止。
+
+最终210秒无故障注入窗口switch-final-1000-20260831：相机2079帧9.895121Hz/最大238.178ms；雷达1050帧5.002429Hz/最大323.751ms。两路接收seq缺口/解析/时间戳错误0，JPEG解码错误0；Foxglove图像最大255.983ms、点云最大326.229ms，均无500ms以上间隔，有效内部内容比对0不一致。详细100/1000帧及P50/P95/P99见BOARD_FIXES。不能将接收seq无缺口等同于每个计划采集时刻均成功，也不能声称严格10Hz或长期稳定通过。

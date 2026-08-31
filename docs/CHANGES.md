@@ -4,6 +4,10 @@
 
 用户追加授权后，已修改并部署board/src/xt_camera.cpp、xt_radar.cpp及新增的device_config.hpp、zenoh_config.hpp、request_parser.hpp、snapshot_client.hpp。新增libcurl/json依赖、原生构建/备份部署脚本、带ASan/UBSan的板端单元、配置及故障注入测试。完整说明和本次SHA见[BOARD_FIXES](BOARD_FIXES.md)。
 
+继续排查后再修改pc/gateway.py：沉默时保留Zenoh会话与订阅，底层自动重连；增加耗时诊断。xt_radar新增异步控制事件记录、publish_queue.hpp有界发布队列，将网络发送与UDP采集解耦。根据用户将全部设备接到交换机的实际拓扑，新增持久radar_network及--network管理入口，设置eth1/.250并实机读回UDP目标。没有改变相机编码、图像文件内容、雷达坐标或抽掉有效点；IMU仅移出原发送调用，不改业务解析。
+
+新增/更新tests/test_gateway.py、test_recovery.py、board_unit.cpp、radar_zenoh_fault.sh与旧eth0故障脚本的拓扑保护。最后18项配置检查、100/1000帧及210秒双流接收、12秒雷达发送阻断、HTTP原始JPEG检查均有独立evidence。当前清单board-switch-manifest-20260831.json；保留此前7分钟失败和改线/未供电窗口，不用最终短测覆盖历史失败。30分钟验收未执行。
+
 下面的“本轮”“没有修改”和旧哈希表保留为**此前PC整理阶段**的历史记录，不再代表当前板端未修改。PC旧板端快照在archive/board-pre-fix-20260831，板端原件在一次性backup-before-jpeg-config-recovery-20260831。没有删除旧证据，也没有改IMU业务或重启整板。
 
 ## 本轮实际修改
