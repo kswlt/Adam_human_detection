@@ -71,7 +71,7 @@ inline void atomic_write(const std::string &path, const std::string &bytes) {
 }
 inline Json defaults() {
     return {{"version", 1}, {"sensors", {{"imu_fps",50}, {"lidar_fps",5},
-        {"image_fps",10}, {"image_format",2}, {"h264_gop",0}, {"h264_bitrate",0}}},
+        {"image_fps",10}, {"image_format",2}, {"h264_gop",20}, {"h264_bitrate",4}}},
         {"zenoh", {{"mode","peer"}, {"connect", Json::array()},
             {"listen", Json::array({"tcp/0.0.0.0:7447"})},
             {"scouting", {{"multicast", {{"enabled",true}}}}}}},
@@ -93,12 +93,14 @@ inline void validate(const Json &j) {
             throw std::runtime_error("radar source must be a unicast IPv4 address");
     }
     const auto &s = j.at("sensors");
-    const int low[] = {1,1,1,2,0,0}, high[] = {50,15,10,2,0,0};
+    const int low[] = {1,1,1,1,0,0}, high[] = {50,15,10,2,200,9};
     for (size_t i=0; i<setting_names.size(); ++i) {
         const auto &v = s.at(setting_names[i]);
         if (!v.is_number_integer() || v < low[i] || v > high[i])
             throw std::runtime_error(std::string("unsupported ") + setting_names[i]);
     }
+    if (s.at("image_format") == 1 && s.at("image_fps") < 5)
+        throw std::runtime_error("MC800S H264 image_fps must be 5..10");
     const auto &z = j.at("zenoh");
     if (z.at("mode") != "peer" && z.at("mode") != "client")
         throw std::runtime_error("zenoh-pico supports peer/client mode");

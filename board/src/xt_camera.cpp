@@ -1,14 +1,13 @@
 /******************************************************************************
- * xt_camera.cpp - MC800S native JPEG snapshot -> Space Camera Protocol V1.0
+ * xt_camera.cpp - MC800S native JPEG/H264 -> Space Camera Protocol V1.0
  *
  * Data channel:
- *   active/{sn}/image  ImageMsgArray  10Hz  format=JPEG(2)
+ *   active/{sn}/image  ImageMsgArray  format=JPEG(2) or H264(3)
  *
  * Payload:
  *   ImageMsgArray.array has exactly one ImageMsg.
- *   ImageMsg.format = ImageFormatJpeg(2)
- *   ImageMsg.width/height = dimensions parsed from actual JPEG bytes
- *   ImageMsg.data = complete JPEG file bytes, unmodified
+ *   JPEG data is one complete native snapshot, unmodified.
+ *   H264 data is one complete native access unit in Annex-B form.
  ******************************************************************************/
 #include <atomic>
 #include <chrono>
@@ -31,22 +30,28 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "zenoh-pico.h"
 #include "zenoh_config.hpp"
+#include "h264_annexb.hpp"
 #include "snapshot_client.hpp"
 
 static const char *CAMERA_IP = "192.168.0.123";
 static const int CAMERA_PORT = 80;
 static const char *CAM_USER = "admin";
+static const char *CAM_PASSWORD = "123456";
 static const char *CAM_PASS_MD5 = "E10ADC3949BA59ABBE56E057F20F883E";
 static const int DEFAULT_SNAPSHOT_STREAM = 1; // MC800S: 1=1920x1080, 0=720x480
 static const int IMAGE_FORMAT_JPEG = 2;
+static const int IMAGE_FORMAT_H264 = 3;
 static int TARGET_HZ = 10;
+static int IMAGE_MODE = IMAGE_FORMAT_JPEG;
 static const char *SN_FILE = "/mnt/system/factory-data/Lixel.yaml";
 static std::string g_sn = "LX2601F10001";
 static const char *RAW_DIR = "/userdata/xtapp/raw_camera";
@@ -58,7 +63,8 @@ static std::atomic<bool> g_running{true};
 static std::atomic<uint32_t> g_seq{0};
 
 struct Frame {
-    std::vector<uint8_t> jpeg;
+    std::vector<uint8_t> data;
+    uint32_t format = IMAGE_FORMAT_JPEG;
     uint32_t width = 0;
     uint32_t height = 0;
     int64_t stamp_ns = 0;
@@ -182,10 +188,10 @@ static std::vector<uint8_t> build_image_array_msg(const Frame &f, uint32_t seq) 
     h.s64(2, f.stamp_ns);
     h.s64(3, 0);
     m.len(1, h.buf.data(), h.buf.size());
-    m.u32(2, IMAGE_FORMAT_JPEG);
+    m.u32(2, f.format);
     m.u32(3, f.width);
     m.u32(4, f.height);
-    m.len(5, f.jpeg.data(), f.jpeg.size());
+    m.len(5, f.data.data(), f.data.size());
     arr.len(1, m.buf.data(), m.buf.size());
     return arr.buf;
 }
@@ -215,6 +221,67 @@ static bool parse_jpeg_size(const std::vector<uint8_t> &jpeg, uint32_t &w, uint3
     return false;
 }
 
+static size_t append_text(char *data, size_t size, size_t count, void *ctx) {
+    const size_t bytes = size * count;
+    static_cast<std::string *>(ctx)->append(data, bytes);
+    return bytes;
+}
+
+static bool configure_native_h264(const xt::Json &sensors) {
+    const int gop = sensors["h264_gop"].get<int>();
+    const int bitrate_mbps = sensors["h264_bitrate"].get<int>();
+    if (gop == 0 || bitrate_mbps == 0) {
+        printf("[h264] ONVIF encoder values left unchanged gop=%d bitrate=%dMbps\n", gop, bitrate_mbps);
+        return true;
+    }
+    const int bitrate_kbps = bitrate_mbps * 1024;
+    const std::string body =
+        "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:trt=\"http://www.onvif.org/ver10/media/wsdl\" "
+        "xmlns:tt=\"http://www.onvif.org/ver10/schema\"><s:Body>"
+        "<trt:SetVideoEncoderConfiguration><trt:Configuration token=\"VideoEncodeMain\">"
+        "<tt:Name>VideoEncodeMain</tt:Name><tt:UseCount>1</tt:UseCount><tt:Encoding>H264</tt:Encoding>"
+        "<tt:Resolution><tt:Width>1920</tt:Width><tt:Height>1080</tt:Height></tt:Resolution>"
+        "<tt:Quality>50</tt:Quality><tt:RateControl><tt:FrameRateLimit>" + std::to_string(TARGET_HZ) +
+        "</tt:FrameRateLimit><tt:EncodingInterval>1</tt:EncodingInterval><tt:BitrateLimit>" +
+        std::to_string(bitrate_kbps) + "</tt:BitrateLimit></tt:RateControl><tt:H264><tt:GovLength>" +
+        std::to_string(gop) + "</tt:GovLength><tt:H264Profile>High</tt:H264Profile></tt:H264>"
+        "<tt:Multicast><tt:Address><tt:Type>IPv4</tt:Type><tt:IPv4Address>192.168.0.123"
+        "</tt:IPv4Address></tt:Address><tt:Port>0</tt:Port><tt:TTL>0</tt:TTL>"
+        "<tt:AutoStart>false</tt:AutoStart></tt:Multicast><tt:SessionTimeout>PT00H12M00S"
+        "</tt:SessionTimeout></trt:Configuration><trt:ForcePersistence>true</trt:ForcePersistence>"
+        "</trt:SetVideoEncoderConfiguration></s:Body></s:Envelope>";
+
+    CURL *curl = curl_easy_init();
+    if (!curl) return false;
+    std::string response;
+    curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/soap+xml; charset=utf-8");
+    curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.0.123/Media");
+    curl_easy_setopt(curl, CURLOPT_PROXY, "");
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 1000L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 3000L);
+    curl_easy_setopt(curl, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+    curl_easy_setopt(curl, CURLOPT_USERNAME, CAM_USER);
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, CAM_PASSWORD);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.data());
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, static_cast<long>(body.size()));
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, append_text);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    const CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    const bool ok = result == CURLE_OK && status == 200 && response.find("Fault") == std::string::npos;
+    printf("[h264] ONVIF main encoder 1920x1080 %dHz GOP=%d bitrate=%dkbps result=%d status=%ld\n",
+           TARGET_HZ, gop, bitrate_kbps, int(result), status);
+    return ok;
+}
+
 
 static void push_frame(Frame &&f) {
     std::lock_guard<std::mutex> lk(g_q_mtx);
@@ -223,7 +290,7 @@ static void push_frame(Frame &&f) {
     g_q_cv.notify_one();
 }
 
-static void capture_thread_main() {
+static void capture_jpeg_thread_main() {
     int stream = snapshot_stream();
     printf("[cap] snapshot stream=%d target=%dHz\n", stream, TARGET_HZ);
     std::string url = std::string("http://") + CAMERA_IP + ":" + std::to_string(CAMERA_PORT) +
@@ -243,7 +310,8 @@ static void capture_thread_main() {
         const bool success = cli.get(jpeg) && parse_jpeg_size(jpeg, w, h);
         if (success) {
             Frame f;
-            f.jpeg = std::move(jpeg);
+            f.data = std::move(jpeg);
+            f.format = IMAGE_FORMAT_JPEG;
             f.width = w;
             f.height = h;
             f.stamp_ns = ts;
@@ -275,6 +343,130 @@ static void capture_thread_main() {
     }
 }
 
+class FfmpegH264Client {
+public:
+    explicit FfmpegH264Client(std::string uri) : uri_(std::move(uri)) {}
+    ~FfmpegH264Client() { stop(); }
+
+    bool start() {
+        stop();
+        int fds[2];
+        if (pipe(fds) != 0) return false;
+        const pid_t child = fork();
+        if (child < 0) { close(fds[0]); close(fds[1]); return false; }
+        if (child == 0) {
+            dup2(fds[1], STDOUT_FILENO);
+            int devnull = open("/dev/null", O_RDWR);
+            if (devnull >= 0) {
+                dup2(devnull, STDIN_FILENO);
+                dup2(devnull, STDERR_FILENO);
+            }
+            for (int fd = 3; fd < 1024; ++fd) close(fd);
+            const char *configured = getenv("XT_CAMERA_FFMPEG");
+            const char *program = configured && *configured ? configured : "/userdata/xtapp/ffmpeg";
+            const char *args[] = {program, "-hide_banner", "-loglevel", "error",
+                "-rtsp_transport", "tcp", "-re", "-i", uri_.c_str(), "-map", "0:v:0",
+                "-an", "-c:v", "copy", "-f", "image2pipe", "pipe:1", nullptr};
+            execv(program, const_cast<char *const *>(args));
+            _exit(127);
+        }
+        close(fds[1]);
+        fd_ = fds[0];
+        pid_ = child;
+        parser_.reset();
+        return true;
+    }
+
+    bool next(std::vector<uint8_t> &access_unit, uint32_t &width, uint32_t &height,
+              int timeout_ms = 4000) {
+        access_unit.clear();
+        while (g_running.load()) {
+            if (parser_.pop(access_unit)) {
+                width = parser_.width();
+                height = parser_.height();
+                return width > 0 && height > 0 && !access_unit.empty();
+            }
+            pollfd pfd{fd_, POLLIN, 0};
+            int result;
+            do { result = poll(&pfd, 1, timeout_ms); } while (result < 0 && errno == EINTR);
+            if (result <= 0 || (pfd.revents & (POLLERR | POLLHUP | POLLNVAL))) return false;
+            uint8_t chunk[64 * 1024];
+            ssize_t got;
+            do { got = read(fd_, chunk, sizeof chunk); } while (got < 0 && errno == EINTR);
+            if (got <= 0) return false;
+            parser_.feed(chunk, static_cast<size_t>(got));
+        }
+        return false;
+    }
+
+    void stop() {
+        if (fd_ >= 0) { close(fd_); fd_ = -1; }
+        if (pid_ <= 0) return;
+        kill(pid_, SIGTERM);
+        int status = 0;
+        for (int i = 0; i < 20; ++i) {
+            if (waitpid(pid_, &status, WNOHANG) == pid_) { pid_ = -1; return; }
+            usleep(25000);
+        }
+        kill(pid_, SIGKILL);
+        waitpid(pid_, &status, 0);
+        pid_ = -1;
+    }
+
+private:
+    std::string uri_;
+    int fd_ = -1;
+    pid_t pid_ = -1;
+    AnnexBAccessUnitParser parser_;
+};
+
+static void capture_h264_thread_main() {
+    const std::string uri = std::string("rtsp://") + CAMERA_IP + ":554/stream0?username=" +
+        CAM_USER + "&password=" + CAM_PASS_MD5;
+    FfmpegH264Client client(uri);
+    uint64_t captures = 0, failures = 0, reconnects = 0;
+    printf("[cap] native H264 RTSP main stream target=%dHz\n", TARGET_HZ);
+    while (g_running.load()) {
+        if (!client.start()) {
+            ++failures;
+            printf("[cap] H264 ffmpeg start failed, retry in 1s\n");
+            sleep(1);
+            continue;
+        }
+        ++reconnects;
+        printf("[cap] H264 RTSP connected attempt=%llu\n", (unsigned long long)reconnects);
+        while (g_running.load()) {
+            std::vector<uint8_t> access_unit;
+            uint32_t width = 0, height = 0;
+            const int64_t begin = monotonic_ns();
+            if (!client.next(access_unit, width, height)) {
+                ++failures;
+                printf("[cap] H264 stream stalled/closed failures=%llu, reconnecting\n",
+                       (unsigned long long)failures);
+                break;
+            }
+            Frame f;
+            f.data = std::move(access_unit);
+            f.format = IMAGE_FORMAT_H264;
+            f.width = width;
+            f.height = height;
+            f.stamp_ns = monotonic_ns();
+            f.capture_id = ++captures;
+            f.fetched_ns = f.stamp_ns;
+            f.http_ms = (f.stamp_ns - begin) / 1e6;
+            push_frame(std::move(f));
+            if ((captures % 100) == 0) {
+                std::lock_guard<std::mutex> lk(g_q_mtx);
+                printf("[cap] H264 frames=%llu failures=%llu queue=%zu reconnects=%llu\n",
+                       (unsigned long long)captures, (unsigned long long)failures, g_queue.size(),
+                       (unsigned long long)reconnects);
+            }
+        }
+        client.stop();
+        if (g_running.load()) std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+}
+
 static bool pop_frame(Frame &f) {
     std::unique_lock<std::mutex> lk(g_q_mtx);
     g_q_cv.wait(lk, [] { return !g_queue.empty() || !g_running.load(); });
@@ -288,10 +480,19 @@ int main() {
     signal(SIGPIPE, SIG_IGN);
     setvbuf(stdout, NULL, _IONBF, 0);
     xt::Json settings;
-    try { settings = xt::load_config(true); TARGET_HZ = settings["sensors"]["image_fps"].get<int>(); }
+    try {
+        settings = xt::load_config(true);
+        TARGET_HZ = settings["sensors"]["image_fps"].get<int>();
+        IMAGE_MODE = settings["sensors"]["image_format"].get<int>() == 1 ? IMAGE_FORMAT_H264 : IMAGE_FORMAT_JPEG;
+    }
     catch (const std::exception &e) { fprintf(stderr, "[cfg] %s\n", e.what()); return 1; }
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return 1;
-    printf("[cam] MC800S native JPEG snapshot -> protocol image channel\n");
+    if (IMAGE_MODE == IMAGE_FORMAT_H264 && !configure_native_h264(settings["sensors"])) {
+        fprintf(stderr, "[h264] refusing to publish because native encoder configuration failed\n");
+        return 1;
+    }
+    printf("[cam] MC800S native %s -> protocol image channel format=%d\n",
+           IMAGE_MODE == IMAGE_FORMAT_H264 ? "H264 RTSP" : "JPEG snapshot", IMAGE_MODE);
     g_raw_enabled = env_enabled("XT_CAMERA_RAW");
     printf("[cam] raw record %s dir=%s/ window=%ds\n", g_raw_enabled ? "on" : "off", RAW_DIR, RAW_WINDOW_SEC);
     load_sn();
@@ -329,7 +530,7 @@ int main() {
     }
     printf("[cam] publisher %s ready\n", key);
 
-    std::thread cap(capture_thread_main);
+    std::thread cap(IMAGE_MODE == IMAGE_FORMAT_H264 ? capture_h264_thread_main : capture_jpeg_thread_main);
     uint64_t published = 0, dropped = 0, put_failures = 0;
     uint64_t last_capture_id = 0;
 
@@ -340,7 +541,7 @@ int main() {
         last_capture_id = f.capture_id;
         double queue_ms = (monotonic_ns() - f.fetched_ns) / 1e6;
         if (queue_ms > 300) { ++dropped; continue; }
-        size_t rw = raw_append(f.stamp_ns, f.jpeg.data(), f.jpeg.size());
+        size_t rw = raw_append(f.stamp_ns, f.data.data(), f.data.size());
 
         uint32_t seq = g_seq++;
         auto encode_start = monotonic_ns();
@@ -354,8 +555,8 @@ int main() {
         if (pr != Z_OK) ++put_failures;
         published++;
         if ((published % 100) == 0 || pr != Z_OK || put_ms > 100 || f.http_ms > 200) {
-            printf("[cam] seq=%u pub=%llu jpeg=%zuB %ux%u msg=%zuB put=%d dropped=%llu raw%zuB http_ms=%.2f queue_ms=%.2f pb_ms=%.2f put_ms=%.2f put_fail=%llu\n",
-                   seq, (unsigned long long)published, f.jpeg.size(), f.width, f.height,
+            printf("[cam] seq=%u pub=%llu format=%u data=%zuB %ux%u msg=%zuB put=%d dropped=%llu raw%zuB source_ms=%.2f queue_ms=%.2f pb_ms=%.2f put_ms=%.2f put_fail=%llu\n",
+                   seq, (unsigned long long)published, f.format, f.data.size(), f.width, f.height,
                    msg.size(), pr, (unsigned long long)dropped, rw, f.http_ms, queue_ms, pb_ms, put_ms,
                    (unsigned long long)put_failures);
         }

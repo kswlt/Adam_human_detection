@@ -55,7 +55,7 @@ Register-ScheduledTask -TaskName YunKeAutostart -Action $action -Trigger $trigge
 | stale_seconds / reconnect_seconds | 3 / 8 |
 | record_pointcloud | true，异步记录原始点云 |
 
-修改配置后重启本机网关生效。独立临时网关必须使用不同端口，并避免同时记录到同一raw目录。板卡相机默认1920×1080；不要在不确认时改snapshot stream。
+修改PC配置后重启本机网关生效。独立临时网关必须使用不同端口，并避免同时记录到同一raw目录。板端共享`/userdata/xtapp/config.json`中的image_format使用0不修改/1 H264/2 JPEG；当前为2，H264参数为GOP20/4Mbps。通过协议setting修改后会原子保存并只重启xt_camera。生产PC网关仍只显示JPEG，切H264应使用`tests/audit_camera_formats.py`或甲方H264接收端验证；不要在不确认时改snapshot stream。
 
 reconnect_seconds现为沉默告警阈值，不是周期重建会话计时器。保留订阅由Zenoh自动重连；只有实际关闭/异常才重建。/api/status新增stale_events、process_max_ms、sdk_log_max_ms、queue_delay_max_ms和diagnostics.event_loop_lag_max_ms。
 

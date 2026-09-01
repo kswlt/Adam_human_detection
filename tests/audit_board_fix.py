@@ -54,7 +54,8 @@ def main():
             ('truncated varint', b'\x80'), ('field zero', b'\x00'),
             ('truncated header', b'\x0a\x05\x01'), ('wrong known wire', b'\x12\x00'),
             ('partial write then bad tail', pb.SettingRequest(lidar_fps=3).SerializeToString()+b'\x80'),
-            ('unsupported image format', pb.SettingRequest(image_format=1).SerializeToString()),
+            ('unsupported image format', pb.SettingRequest(image_format=3).SerializeToString()),
+            ('negative image format', pb.SettingRequest(image_format=-1).SerializeToString()),
             ('out of range FPS', pb.SettingRequest(image_fps=100).SerializeToString()),
         ]:
             bad = setting(payload)

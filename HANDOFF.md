@@ -1,6 +1,24 @@
 # 当前交接入口
 
 最后更新：2026-08-31，Windows工作目录`C:\Users\Admin\Desktop\yunke`。
+
+**2026-09-01相机双格式已部署**：甲方最新确认`SettingRequest.image_format`为0不修改、1 H264、2 JPEG；实际`ImageMsg.format`分别为3和2。MC800S MainStream实测为原生H264 High 1920x1080/10Hz/4096kbps/GOP20，板端使用RTSP/TCP加ffmpeg `-c:v copy`，一条消息一个Annex-B access unit；JPEG仍是原生snapshot完整文件。H264 1800帧3分钟10.010749Hz、JPEG1000帧9.939858Hz，均零协议错误/seq缺口，H264从首个IDR起1781帧被标准解码器全部解码。JPEG/H264分别做过整板重启持久化。完整证据和风险见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。
+
+当前最终留在JPEG，`config.json`为image_format2/image_fps10/h264_gop20/h264_bitrate4；浏览器`/latest.jpg`实测1920x1080、网关healthy约10Hz。最终板端SHA：xt_camera `6601b46c...d13808b`，xt_radar `780e9710...5ff4e2`。相机setting重启已改为关闭继承fd后fork/exec，隔离复测中xt_radar PID1290不变，7447/7448分别只由radar/camera持有。PC网关按任务约束仍只显示JPEG，H264通过独立订阅和FFmpeg验证；雷达源当前无有效帧，不能把“进程未重启”扩写为点云连续通过。
+
+**2026-09-01最新异常覆盖**：雷达当前处于反复停流/固件重启循环，Foxglove怪点云来自真实收到的异常源数据，不是显示器造点。完整当前日志7303个温度抽样中3204个sensor读数超出-40..125°C（范围-293.70..310.95°C），累计735条`sensor fail 1 to reboot`、772个新停流周期并都曾恢复；devstate帧尾仍全为3，说明该字段不足以识别故障。50帧实测139453点，距离中位8.697m、P95 36.831m、最大50.000m，明显超出M60室内0.3-20m标称范围，强度P50=229/P95=255。当前数据不可作为可靠测距。证据`evidence/radar-weird-full-20260901.log`、`current-weird-pointcloud-range-20260901.json`。未改源码/参数/颜色。
+
+Foxglove通道使用固定`frame_id=lidar`和单位姿态，无IMU/TF；转动雷达时环境会在雷达坐标中变化，不会稳定到世界坐标。源停流时Foxglove保留最后一帧，因此遮挡后仍看到点不等于仍收到新点。PC没有删点或距离裁剪，异常0-50m数据原样适配显示。
+
+自启动配置存在：板端rcS运行S98xtnet/S99xtcamera/S99xtradar，当前脚本和二进制存在；PC `YunKeAutostart` BootTrigger/StartWhenAvailable/无限时长且Running。两个同启动时刻python进程是Windows venv redirector和实际解释器，不是两个独立网关。整板冷启动仍没有本轮正式验收，不能仅凭配置称百分百通过。外部风扇是否共用雷达电源待用户答复；静电只有触碰裸针/未接地导体或带电插拔时才是候选，单纯遮挡光学窗不能解释持续错误温度/重启。
+
+**当前状态（用户再次给雷达重新上电后）**：雷达.101已恢复，原xt_radar PID14084自动接回，未重启板端服务；ping3/3、TCP7787建立，UDP目标读回.250:7687。新60秒直接/WS点云各300帧、约5Hz，最大318.219/335.238ms，seq/解析/stamp错误0，温度末次45.74°C，sensor fail旧计数10未增。证据 `evidence/radar-second-powercycle-60s-20260831/summary.json`。下述19:47离线为历史故障，不能当作现在仍离线；但本次恢复也不意味着根因已查清。未改代码、参数或颜色，测试已结束。
+
+**最新现场状态（约19:47）**：散热短测之后雷达再次离线，最后收帧约19:37:55，已持续9分钟以上；停流前最后温度54.22°C，旧sensor fail计数10未增加。PC和板端ping失败，绑定实体PC地址的TCP7787连接超时，板端ARP3次0响应；相机正常、两生产进程未退出。厂家GUI曾使用198.18.0.1连接且不断命令超时，但当前板端绕过该路径也不可达，不可仅归咎于代理或过热。待用户检查雷达供电/交换机端口/IP改动，详见断流调查末节。本轮未改代码、参数或颜色。
+
+最新故障覆盖说明：210 秒短测后又发生雷达自然断流。当前已查到 UDP 停止、设备报告 `sensor fail 1 to reboot`，首次故障前传感器读数最高 87.47°C，但后续约 58.6°C 也有故障，尚不能确诊过热保护。详见 [雷达断流调查](docs/RADAR_FREEZE_INVESTIGATION.md)。本次仅只读检查与记录，未修改/部署运行代码、未改颜色、未主动启停或复位；不能声称长期稳定已通过。
+
+用户添加外部散热后完成 180 秒短测：sensor 54.04→49.55°C，断流/故障 trace 累计仍为 8/10、没有新增；直接雷达 900 帧 4.999873Hz、最大 231.597ms，Foxglove 点云数据流最大 241.626ms，解析/seq/stamp 错误 0。证据 `evidence/radar-cooling-180s-20260831/` 及 `radar-cooling-temperature-180s-20260831.txt`。正常服务继续运行，短测已结束，30 分钟仍暂缓。散热前已自行恢复，不能把此轮无故障当作过热原因已确诊。
 旧的本文件及system_handoff.md/codex_prompt.md已保存在`archive/historical-root-20260831.zip`，只作历史记录，以本版为准。
 
 ## 先读
@@ -33,7 +51,7 @@ PC累计计数包含旧版故障、部署回滚和测试造成的中断/序号�
 
 本轮明确修改并部署board/src和板端二进制，也修改pc/gateway.py：数据源沉默时保留订阅，让Zenoh恢复TCP连接；仅会话确实关闭或异常才重建。新增处理/SDK发布/队列/HTTP事件循环耗时诊断。相机编码配置未变。旧板端二进制备份在PC的archive/board-pre-fix-20260831，以及板端/userdata/xtapp/backup-before-jpeg-config-recovery-20260831。
 
-保持MC800S原生1080p JPEG，不引入H264转码/降清晰度。共享配置在/userdata/xtapp/config.json，setting保存后重启服务生效。config_file发送config.json及真实lidar_intrinsics.json，没有伪造camera-lidar外参。
+保持MC800S原生1080p JPEG，并新增相机原生H264直通；两路都不转码/不降清晰度。共享配置在/userdata/xtapp/config.json，图像setting保存后仅重启相机服务生效。config_file发送config.json及真实lidar_intrinsics.json，没有伪造camera-lidar外参。
 构建用板端原有xtbuilder及项目vendor/zenoh-pico，输出容器/tmp/xtbuild。曾误用板端旧库缓存（FRAG4096）导致一次发布验收失败，已回滚后用项目源码FRAG300000重建并恢复；构建入口现会拒绝该旧缓存。不要再链接/userdata/xtapp/zenoh-pico-main/build。Windows WSL/Docker没有重置。
 
 相机源端计时与雷达时钟epoch不同；Foxglove只使用PC接收时刻作显示，原消息stamp保留。必须补测曝光/传输延迟才能声称端到端低延迟。

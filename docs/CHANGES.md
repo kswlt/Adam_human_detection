@@ -1,5 +1,9 @@
 # 改动与清理记录
 
+## 2026-09-01 相机双格式
+
+新增MC800S原生H264 RTSP直通与Annex-B access-unit解析，保留原生JPEG；修正setting枚举映射、H264真实能力校验、持久化后相机专用重启和Zenoh fd继承。同步最终板端二进制和独立JPEG/H264订阅/解码测试。没有修改PC生产网关、Foxglove、雷达采集/点云算法或IMU；`xt_radar.cpp`仅改setting控制面。详情见[相机双格式交付记录](CAMERA_DUAL_FORMAT_20260901.md)。下文“没有H264/没有改板端”的段落是此前阶段历史，不代表当前状态。
+
 ## 后续板端修复
 
 用户追加授权后，已修改并部署board/src/xt_camera.cpp、xt_radar.cpp及新增的device_config.hpp、zenoh_config.hpp、request_parser.hpp、snapshot_client.hpp。新增libcurl/json依赖、原生构建/备份部署脚本、带ASan/UBSan的板端单元、配置及故障注入测试。完整说明和本次SHA见[BOARD_FIXES](BOARD_FIXES.md)。

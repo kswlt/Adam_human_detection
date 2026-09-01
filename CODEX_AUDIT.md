@@ -2,6 +2,20 @@
 
 2026-08-31。完整矩阵见[协议审查](docs/PROTOCOL_AUDIT.md)，测量见[验收报告](docs/ACCEPTANCE.md)。
 
+**2026-09-01相机覆盖结论**：JPEG/H264双格式已按甲方最新枚举确认实现并部署。setting 0/1/2分别是不修改/H264/JPEG，发布format严格为3/2；H264来自MC800S原生1920x1080 MainStream，经ffmpeg `-c:v copy`和Annex-B access-unit解析，不解码/重编码。JPEG1000帧9.939858Hz，H264三分钟1800帧10.010749Hz，解析/格式/seq/timestamp错误0；解码文件从首个IDR起1781/1781帧通过标准FFmpeg。两格式整板重启持久化通过。相机专用重启fd继承问题已修，隔离切换时xt_radar PID与7447归属不变。详细证据见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。当前留在JPEG，PC生产网关仍只显示JPEG；雷达源无有效帧，点云数据连续性未随本任务复验。
+
+**2026-09-01 P1现场故障**：当前点云虽间歇恢复约5Hz，但源雷达反复`sensor fail 1 to reboot`。完整生产日志统计：7303条temp记录，sensor最小-293.70°C、最大310.95°C，3204条超出设备工作温区；735条sensor fail，772个attempt=1停流周期/772次恢复。50帧直接PB为139453个未裁剪点，距离最大50.000m、P95 36.831m，超M60室内20m标称范围；强度P95=255。帧尾devstate全3不能排除此故障。协议封装仍可解析不等于测量可信，当前不可签收雷达数据质量或稳定性。
+
+PC显示路径复核：`gateway.py`只按scaler1000还原xyz、保留全部点，固定lidar frame和identity pose，不使用IMU/TF、不做距离过滤。Foxglove断流时保留最后一帧，可能造成遮挡不变化的表象。转动无IMU雷达会令环境相对lidar坐标变化。未修改代码或参数。证据`evidence/current-weird-pointcloud-range-20260901.json`和`radar-weird-full-20260901.log`。
+
+**再次上电后的当前验证**：用户物理重启雷达后，原xt_radar进程14084自动恢复，无需重启板端服务。60秒直接/WS点云各300帧，平均5.005150/5.007679Hz，最大318.219/335.238ms，无500ms间断；直接seq缺口/重置/解析/时间戳错误0，点云内容哈希300/300匹配。温度45.74°C、sensor fail旧计数10未增，相机正常。掉电引起设备时间戳epoch重置，PC历史timestamp_nonmono由7增至8，未清零；新窗口无回退不代表整个会话无回退。离线根因未确诊，未改运行代码或参数。证据 `evidence/radar-second-powercycle-60s-20260831/`。
+
+**19:47现场失败覆盖**：散热后仍再次断流，当前雷达配置地址.101网络不可达，PC/板端ping及板端ARP无响应，PC绑定实体.200连接7787超时，源端帧/UDP计数不增长，图像正常。故障前最后sensor温度54.22°C，sensor fail旧计数10无新增。厂家GUI上线与停流时间接近，曾用Clash地址，但未证明UDP目标被改写；当前不能简单归因过热或代理。用户物理供电/网口/IP核查待反馈；软件未改动。本轮证据见RADAR_FREEZE_INVESTIGATION末节。
+
+最新现场问题：雷达又发生 8 个自然断流周期，设备 trace 共 10 次 `sensor fail 1 to reboot`。首次停流前 sensor 读数最高 87.47°C（已核对厂家 /100 换算），后续较低读数也复现。现有 TCP 日志漏记 device state，不能把 command status=0 当作无高温报警；重复恢复/复位还可能延长初始化。详见 [断流调查](docs/RADAR_FREEZE_INVESTIGATION.md)。本轮未改运行代码或颜色，尚未根治，不能用下文短测结果覆盖此次失败。
+
+用户新增外部散热后的 180 秒独立短测：直接/WS 点云各 900 帧，约 5Hz，最大间隔 231.597/241.626ms，seq/解析/stamp 错误 0；sensor 约 3 分钟内 54.04→49.55°C，故障计数无新增、进程不变。没有修改运行代码或配置；未测供电、未获取故障瞬间 device state，不宣称热保护已确诊或长稳通过。测量记录 `evidence/radar-cooling-180s-20260831/summary.json`。
+
 ## 本轮修复
 
 本次已修改/编译/部署板端，详见[BOARD_FIXES](docs/BOARD_FIXES.md)。原优先发现中的FrameInfo/UDP内存边界、frames==0恢复限制、工厂文件覆写、setting坏请求/持久化、config_file、相机HTTP状态机已处理。主动断链进一步暴露eth0恢复后专用路由消失，已将专用路由/辅助地址修复纳入重连；最后验证结果见修复记录，不仅看一次“恢复”日志。
@@ -41,4 +55,4 @@
 
 最终210秒实际收包：JPEG2079帧9.895121Hz、雷达1050帧5.002429Hz，最大间隔238.178/323.751ms；直接和Foxglove均无500ms以上间隔，接收seq/解析/时间戳错误0，JPEG解码错误0。100/1000帧完整分位数见BOARD_FIXES；证据switch-final-1000-20260831。点云含0个有效点的完整帧，未假装每帧点数恒定。严格10Hz、长稳、完整联合标定等仍不宣称通过。
 
-旧记录已归档，不能引用其中“全部正常”作当前结论。当前已改动板端源码，哈希及测试版本以[BOARD_FIXES](docs/BOARD_FIXES.md)为准。保留问题：setting.image_format协议两节冲突、联合外参缺失、QoS推荐值尚未显式全部适配、SN唯一性、RTC及板端服务/日志运维；不宣称全协议无条件通过。
+旧记录已归档，不能引用其中“全部正常”作当前结论。当前已改动板端源码，哈希及测试版本以[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)及[BOARD_FIXES](docs/BOARD_FIXES.md)为准。setting.image_format文档冲突已由甲方最新确认覆盖；仍保留H264 access-unit互通约定、联合外参、QoS、SN唯一性、RTC、板端日志运维和当前雷达源异常等风险，不宣称全协议无条件通过。

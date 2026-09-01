@@ -4,14 +4,14 @@
 
 ## 1. 目标与范围
 
-RK3562 将 MC800S 相机和 XT-M60 雷达数据转换为《空间相机通信协议 V1.0》的 Zenoh / Protobuf 消息。PC 负责协议接收、原生 JPEG 解码显示和点云可视化。用户已授权板端修改，本轮已重新编译部署，具体见BOARD_FIXES；不修IMU业务、不降分辨率、不重新引入H264路径。
+RK3562 将 MC800S 相机和 XT-M60 雷达数据转换为《空间相机通信协议 V1.0》的 Zenoh / Protobuf 消息。相机支持原生JPEG snapshot和原生H264 RTSP双格式；PC生产网关负责JPEG显示和点云可视化，H264由独立协议订阅/标准解码器验收。用户已授权板端修改，本轮已重新编译部署；不修IMU业务、不降分辨率、不做视频重新编码。
 
 板卡型号由设备树 `rockchip,rk3562`、`uname` 确认。此前笼统称 RK3566 的描述不应当作当前板卡识别结果。
 
 ## 2. 网络和进程
 
 ```text
-MC800S 192.168.0.123 -- HTTP JPEG -- RK3562 xt_camera :7448
+MC800S 192.168.0.123 -- HTTP JPEG / RTSP H264 -- RK3562 xt_camera :7448
 XT-M60 192.168.0.101 -- TCP控制/UDP -- RK3562 xt_radar :7447
                                           |
                              eth1 192.168.0.250 (交换机)
@@ -30,11 +30,12 @@ XT-M60 192.168.0.101 -- TCP控制/UDP -- RK3562 xt_radar :7447
 
 ## 3. 相机路径
 
-MC800S `/cgi-bin/snapshot.cgi` 的 `stream=1` 原生生成 1920×1080 JPEG。板端 HTTP 获取完整文件，仅包装 Header、ImageMsg 和 ImageMsgArray，通过 `active/LX2601F10001/image` 发布。
+MC800S `/cgi-bin/snapshot.cgi` 的 `stream=1` 原生生成1920×1080 JPEG；MainStream原生提供H264 High 1920×1080/10Hz。板端按共享配置选择HTTP完整JPEG，或RTSP/TCP经ffmpeg `-c:v copy`取得Annex-B码流并按完整access unit分帧，再包装为ImageMsgArray发布到`active/LX2601F10001/image`。
 
 - 顶层必须 `ImageMsgArray`，单帧 array 长度 1。
-- `format=2`，width/height 与 JPEG 实际尺寸一致，data 为完整 JPEG 文件。
-- 不进行 H264 解码、不进行 JPEG 二次编码。图片上的日期是相机 OSD；PC 不修改图内文字。
+- JPEG为`format=2`，data是完整原始文件；H264为`format=3`，data是一个完整Annex-B access unit，IDR可获得SPS/PPS。两者array长度均为1、width/height均为实际1920×1080。
+- 不进行H264解码/重新编码，不进行JPEG二次编码。图片上的日期是相机OSD；PC不修改图内文字。
+- setting image_format的0/1/2分别表示不修改/H264/JPEG，不能直接作为ImageMsg.format。
 - 历史 `stream=0` 是 720×480，不是 1280×720。当前不切换它；没有本轮 720p Zenoh 测量。
 - HTTP客户端支持Keep-Alive，但相机实际逐次关闭连接，不能宣称相机支持持久连接。当前libcurl版本已经处理Connection:close、chunked、断线重连，连接期限150ms、整次GET总期限350ms。
 - 板端采集/发布线程分离，队列 3 帧；PC 每路接收队列 4 帧。满队列舍弃旧帧、计数，不允许无限积压；这不是“每帧抽点”。拥塞时不能保证无损保存每个时刻的帧。

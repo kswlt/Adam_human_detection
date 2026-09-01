@@ -72,6 +72,8 @@ static void config_tests() {
     setenv("XT_CONFIG_FILE",path.c_str(),1);
     auto cfg=xt::load_config(true);
     assert(cfg["sensors"]["image_fps"]==10);
+    assert(cfg["sensors"]["image_format"]==2 && cfg["sensors"]["h264_gop"]==20 &&
+           cfg["sensors"]["h264_bitrate"]==4);
     cfg["sensors"]["lidar_fps"]=4;
     cfg["additional"]={{"preserve",true}};
     cfg["radar_network"]={{"interface","eth1"},{"source_address","192.168.0.250"}};
@@ -88,6 +90,15 @@ static void config_tests() {
     bool rejected=false;
     try { xt::validate(invalid); } catch (...) { rejected=true; }
     assert(rejected);
+    cfg["sensors"]["image_format"]=1;
+    xt::save_config(cfg);
+    assert(xt::load_config()["sensors"]["image_format"]==1);
+    for (auto pair : std::vector<std::pair<const char *,int>>{{"image_fps",4},{"h264_bitrate",10}}) {
+        auto unsupported=cfg; unsupported["sensors"][pair.first]=pair.second;
+        bool rejected_value=false;
+        try { xt::validate(unsupported); } catch (...) { rejected_value=true; }
+        assert(rejected_value);
+    }
     auto before=xt::read_file(path);
     cfg["sensors"]["image_format"]=3;
     bool failed=false;

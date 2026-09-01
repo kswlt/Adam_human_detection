@@ -1,6 +1,7 @@
 # 协议与恢复能力审查
 
 日期：2026-08-31。结论：**数据格式主要路径通过，整套系统不满足严格全项验收。**
+2026-09-01覆盖：甲方已正式确认setting image_format为0不修改/1 H264/2 JPEG，原PDF冲突不再是待确认项。JPEG/H264双格式已部署，详见[相机双格式交付记录](CAMERA_DUAL_FORMAT_20260901.md)；下表中的JPEG-only、setting未实现等行是修复前历史，不代表当前源码。
 本页原矩阵为修复前审查。随后按用户要求完成板端修复，最新实现/测试见[BOARD_FIXES](BOARD_FIXES.md)：config_file、原子持久化、坏请求拒绝、实际配置回读、HTTP总期限/连接处理、FrameInfo/UDP边界、独立seq、工厂SN只读、持续断流恢复均已补齐。断链发现的专用路由丢失也纳入恢复。保留下面原始发现供追溯，不能再将其中“未实现”当作当前源码状态。
 依据原件 `reference/2-空间相机通信协议V1.0.pdf`，SHA256 `5BDA83FFE90A4321091E15AD09340D06FA5B1CB14CD56A61F013611F020759B0`。
 独立检查使用 `protocol/active_msgs.proto` 生成的官方 Protobuf 解析器，不再使用板端同一手写解析器来互相证明正确。
@@ -59,7 +60,7 @@ payload: FileMsgArray { array: [
 
 ## 4. 协议歧义与待签字项
 
-- `ImageMsg.format` 的 JPEG=2 明确；**SettingRequest.image_format** 第6节为0无效/1H264/2JPEG，第8节却是0H264/1JPEG且>0生效，两处冲突。须由协议方确认，不能套用 ImageMsg 的 H264=3 去改 setting。
+- `SettingRequest.image_format`冲突已由甲方确认覆盖：0不修改、1 H264、2 JPEG；`ImageMsg.format`仍是H264=3、JPEG=2。PDF仍未规定H264 data的AU/NAL及Annex-B/AVCC边界，当前采用一个完整Annex-B access unit并保留为互通确认项。
 - 1080p 出现在带宽估算，用户额外要求1080p优先，当前按此保持；不要把估算中的数据量当每帧最小字节数。
 - 时间戳单位/epoch、0值 ring/offset 的设备适配规则、seq 重启规则和频率公差应明确。没有公差时本报告不判定9.82等于10。
 - QoS 表给出的 RealTime(6) 与所用 Zenoh 枚举语义需核对，配置应依据实际 API 枚举而非照抄不一致数字。
@@ -67,7 +68,7 @@ payload: FileMsgArray { array: [
 ## 5. 建议修复顺序
 
 先修板端解析边界和运行后断流恢复；再补相机 HTTP 总请求期限/Connection:close/SIGPIPE 处理以及分阶段耗时计数。之后实现共享持久配置、setting错误码与实际值回读、真实config_file；最后执行物理热插拔、断电重启、router/QoS测试与被暂停的30分钟测试。
-全过程保留原生1080p JPEG路线，不自行降分辨率，也不通过重复旧图来凑10Hz。
+全过程保留原生1080p JPEG，并以相机原生H264直通扩展；不自行降分辨率、转码或通过重复旧帧凑10Hz。
 
 ## 6. 交付前追加现场事实
 

@@ -823,6 +823,20 @@ static void file_publisher_main() {
     }
 }
 
+static int restart_camera_service_isolated() {
+    const pid_t child = fork();
+    if (child < 0) return -1;
+    if (child == 0) {
+        // Never leak the radar Zenoh/control sockets into the restarted camera service.
+        for (int fd = 3; fd < 4096; ++fd) close(fd);
+        execl("/etc/init.d/S99xtcamera", "S99xtcamera", "restart", static_cast<char *>(nullptr));
+        _exit(127);
+    }
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+    return status;
+}
+
 static void query_handler(z_loaned_query_t *query, void *arg) {
     (void)arg;
     const z_loaned_keyexpr_t *qk = z_query_keyexpr(query);
@@ -848,6 +862,7 @@ static void query_handler(z_loaned_query_t *query, void *arg) {
     unsigned code = 0;
     std::string desc = "success";
     bool reboot = false;
+    bool restart_camera = false;
     std::array<int32_t,6> values{};
     bool valid = xt::parse_request(body.data(), body.size(), values, cmd == "setting");
     if (cmd == "setting") {
@@ -856,20 +871,25 @@ static void query_handler(z_loaned_query_t *query, void *arg) {
         if (!valid) { code = 1; desc = "invalid SettingRequest protobuf"; }
         else {
             for (size_t i=0; i<values.size(); ++i)
-                if (values[i] > 0) candidate["sensors"][xt::setting_names[i]] = values[i];
+                if (values[i] != 0) candidate["sensors"][xt::setting_names[i]] = values[i];
             try { xt::validate(candidate); }
             catch (const std::exception &e) { code=1; desc=e.what(); }
             if (code == 0 && candidate != g_config) {
+                for (size_t i=2; i<values.size(); ++i)
+                    restart_camera = restart_camera ||
+                        candidate["sensors"][xt::setting_names[i]] != g_config["sensors"][xt::setting_names[i]];
                 try {
                     xt::save_config(candidate);
                     g_config = candidate;
                     g_files_requested = true;
-                } catch (const std::exception &e) { code=2; desc=e.what(); }
+                } catch (const std::exception &e) { code=2; desc=e.what(); restart_camera=false; }
             }
         }
         for (size_t i=0; i<values.size(); ++i) w.s32(int(i)+2, g_config["sensors"][xt::setting_names[i]].get<int32_t>());
-        xt::Json parameter = {{"apply","restart"}, {"active",g_active_config["sensors"]},
-            {"config_path",xt::config_path()}, {"setting_image_format","2=JPEG (protocol section 6)"}};
+        xt::Json parameter = {{"apply",restart_camera ? "camera_restart_scheduled" : "no_restart"},
+            {"active",g_active_config["sensors"]}, {"config_path",xt::config_path()},
+            {"setting_image_format",{{"0","no change"},{"1","H264"},{"2","JPEG"}}},
+            {"published_image_format",{{"H264",3},{"JPEG",2}}}};
         w.str(8, parameter.dump());
     } else if (cmd == "reboot") {
         if (!valid) { code=1; desc="invalid RebootRequest protobuf"; }
@@ -879,6 +899,13 @@ static void query_handler(z_loaned_query_t *query, void *arg) {
     z_owned_bytes_t reply;
     z_bytes_copy_from_buf(&reply, w.buf.data(), w.buf.size());
     int result = z_query_reply(query, qk, z_move(reply), NULL);
+    if (restart_camera && code == 0 && result == Z_OK) {
+        std::thread([] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            const int status = restart_camera_service_isolated();
+            printf("[cfg] camera-only restart status=%d\n", status);
+        }).detach();
+    }
     if (reboot && result == Z_OK) {
         std::thread([] {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
