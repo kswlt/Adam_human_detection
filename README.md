@@ -51,3 +51,4 @@ scripts/           一次性整理脚本，不要再次执行
 
 开发环境：Windows / Python 3.13.2。执行 `./setup_pc.ps1` 后用 `.venv/Scripts/python.exe -m unittest tests.test_gateway -v` 验证。
 图像/点云仍是标准 Zenoh + 原协议 Protobuf；Foxglove 格式仅是 PC 显示适配层，不是替换板端协议。
+# yk_test
