@@ -39,6 +39,7 @@
 
 #include "zenoh-pico.h"
 #include "zenoh_config.hpp"
+#include "zenoh_qos.hpp"
 #include "h264_annexb.hpp"
 #include "snapshot_client.hpp"
 
@@ -524,10 +525,12 @@ int main() {
     snprintf(key, sizeof key, "active/%s/image", g_sn.c_str());
     z_owned_keyexpr_t ke;
     z_keyexpr_from_str(&ke, key);
-    if (z_declare_publisher(z_loan(s), &g_pub_img, z_loan(ke), NULL) != Z_OK) {
+    auto image_qos = xt::fragmented_sensor_data_qos();
+    if (z_declare_publisher(z_loan(s), &g_pub_img, z_loan(ke), &image_qos) != Z_OK) {
         printf("[cam] publisher declare failed\n");
         return 1;
     }
+    xt::log_fragmented_sensor_qos(key, image_qos);
     printf("[cam] publisher %s ready\n", key);
 
     std::thread cap(IMAGE_MODE == IMAGE_FORMAT_H264 ? capture_h264_thread_main : capture_jpeg_thread_main);

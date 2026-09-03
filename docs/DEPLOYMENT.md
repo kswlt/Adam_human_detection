@@ -49,8 +49,8 @@ Register-ScheduledTask -TaskName YunKeAutostart -Action $action -Trigger $trigge
 | 字段 | 当前值/作用 |
 | --- | --- |
 | sn | LX2601F10001，匹配板端主题 |
-| image_endpoint | tcp/192.168.0.250:7448 |
-| pointcloud_endpoint | tcp/192.168.0.250:7447 |
+| image_endpoint | tcp/192.168.1.179:7448 |
+| pointcloud_endpoint | tcp/192.168.1.179:7447 |
 | bind / http_port / foxglove_port | 127.0.0.1 / 8080 / 8766 |
 | stale_seconds / reconnect_seconds | 3 / 8 |
 | record_pointcloud | true，异步记录原始点云 |
@@ -61,7 +61,7 @@ reconnect_seconds现为沉默告警阈值，不是周期重建会话计时器。
 
 ### 当前交换机拓扑
 
-用户已将路由器换成交换机，雷达也接到同一交换机。板端eth0无链路，eth1=192.168.0.250；PC=.200、相机=.123、雷达=.101。本地通信不依赖默认网关，不能沿用旧的eth0直连路由。
+当前PC经ADAM_5G Wi-Fi接入交换机，板端对PC的可达地址为eth0 `192.168.1.179`；PC端图像/点云Zenoh endpoint必须使用该地址。`192.168.0.250`继续作为雷达采集的历史源地址/别名，不应再用于PC访问板端。PC本次观测的Wi-Fi地址为`192.168.1.219/23`，使用DHCP，不能手工追加`.200`静态地址。
 
 新版xt_radar读取共享配置中的可选radar_network，指定interface和source_address；旧配置缺省仍兼容eth0/.179。当前交换机配置为eth1/.250，雷达cmd19的目标同时改为192.168.0.250:7687。维护命令先原子保存，随后只重启雷达服务：
 
@@ -90,12 +90,12 @@ reconnect_seconds现为沉默告警阈值，不是周期重建会话计时器。
 
 ## 5. 板端定位与构建
 
-SSH主机 `root@192.168.0.250`，固定指纹：
+SSH主机 `root@192.168.1.179`，固定指纹：
 `SHA256:Oa6mKwXI0b7Ybt3BYNnI7LAeU1eWYHl6bgCQ85bvsuM`。
 凭证沿用现有设备配置，不在交付文档再次散布明文密码；连接时输入已配置密码或使用本地安全凭证。
 
 ```powershell
-plink -ssh -hostkey SHA256:Oa6mKwXI0b7Ybt3BYNnI7LAeU1eWYHl6bgCQ85bvsuM root@192.168.0.250
+plink -ssh -hostkey SHA256:Oa6mKwXI0b7Ybt3BYNnI7LAeU1eWYHl6bgCQ85bvsuM root@192.168.1.179
 ```
 
 设备路径：二进制`/userdata/xtapp/xt_camera`、`xt_radar`，日志`camera.log`、`xt_radar.log`；服务`/etc/init.d/S98xtnet`、`S99xtradar`、`S99xtcamera`。重复camera start有抢端口风险，维护时使用明确stop/restart并验证PID。

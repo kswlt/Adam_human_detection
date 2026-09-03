@@ -12,3 +12,6 @@ for name in board_unit snapshot_unit h264_unit; do
     "$ZBUILD/lib/libzenohpico.a" "$BUILD/curl/lib/libcurl.a" -lpthread -ldl -lm
   ASAN_OPTIONS=detect_leaks=1 "$BUILD/$name"
 done
+g++ -std=c++17 -O2 -DZENOH_LINUX \
+  -I"$ZSOURCE/include" -I"$ZBUILD/include" "$ROOT/tests/qos_probe.cpp" \
+  -o "$BUILD/qos_probe" "$ZBUILD/lib/libzenohpico.a" -lpthread -ldl -lm

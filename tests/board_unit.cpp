@@ -4,6 +4,25 @@
 #include <cassert>
 #include <random>
 
+static void qos_tests() {
+    auto sensor = xt::sensor_data_qos();
+    assert(sensor.congestion_control == Z_CONGESTION_CONTROL_DROP);
+    assert(sensor.priority == Z_PRIORITY_DATA);
+    assert(sensor.reliability == Z_RELIABILITY_BEST_EFFORT);
+    auto fragmented_sensor = xt::fragmented_sensor_data_qos();
+    assert(fragmented_sensor.congestion_control == Z_CONGESTION_CONTROL_DROP);
+    assert(fragmented_sensor.priority == Z_PRIORITY_DATA);
+    assert(fragmented_sensor.reliability == Z_RELIABILITY_RELIABLE);
+    auto realtime = xt::realtime_sensor_qos();
+    assert(realtime.congestion_control == Z_CONGESTION_CONTROL_DROP);
+    assert(realtime.priority == Z_PRIORITY_REAL_TIME);
+    assert(realtime.reliability == Z_RELIABILITY_BEST_EFFORT);
+    auto reliable = xt::reliable_data_qos();
+    assert(reliable.congestion_control == Z_CONGESTION_CONTROL_BLOCK);
+    assert(reliable.priority == Z_PRIORITY_DATA);
+    assert(reliable.reliability == Z_RELIABILITY_RELIABLE);
+}
+
 static void control_tests() {
     assert((radar_udp_destination()==std::vector<uint8_t>{192,168,0,179,0x07,0x1e}));
     const char *old_source=BOARD_IP;
@@ -146,6 +165,6 @@ static void frame_tests() {
     }
 }
 int main() {
-    control_tests(); publish_queue_tests(); request_tests(); config_tests(); frame_tests();
+    qos_tests(); control_tests(); publish_queue_tests(); request_tests(); config_tests(); frame_tests();
     printf("PASS: config atomic persistence, malformed protobuf, 20000 fuzz cases, UDP duplicates/bounds, FrameInfo bounds (%zu)\n",sizeof(FrameInfo));
 }

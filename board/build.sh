@@ -11,9 +11,14 @@ ZBUILD=${ZBUILD:-"$BUILD/zenoh-aarch64"}
 if [ "${REUSE_ZENOH:-0}" != 1 ]; then
 cmake -S "$ZSOURCE" -B "$ZBUILD" \
   -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DFRAG_MAX_SIZE=300000 \
+  -DZ_FEATURE_UNSTABLE_API=1 \
   -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
   -DCMAKE_C_COMPILER="${CROSS}gcc"
 cmake --build "$ZBUILD" --parallel "$JOBS"
+fi
+if ! grep -Eq '^#define Z_FEATURE_UNSTABLE_API([[:space:]]+1)?[[:space:]]*$' "$ZBUILD/include/zenoh-pico/config.h"; then
+  echo 'Zenoh must be rebuilt with Z_FEATURE_UNSTABLE_API=1 for explicit reliability QoS.' >&2
+  exit 1
 fi
 if ! grep -q '^#define Z_FRAG_MAX_SIZE 300000$' "$ZBUILD/include/zenoh-pico/config.h"; then
   echo 'Zenoh must be rebuilt with FRAG_MAX_SIZE=300000; refusing incompatible cache.' >&2

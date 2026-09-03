@@ -1,8 +1,8 @@
 {
   "sn": "LX2601F10001",
   "record_pointcloud": true,
-  "image_endpoint": "tcp/192.168.0.250:7448",
-  "pointcloud_endpoint": "tcp/192.168.0.250:7447",
+  "image_endpoint": "tcp/192.168.1.179:7448",
+  "pointcloud_endpoint": "tcp/192.168.1.179:7447",
   "bind": "127.0.0.1",
   "http_port": 8080,
   "foxglove_port": 8766,

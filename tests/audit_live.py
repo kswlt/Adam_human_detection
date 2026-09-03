@@ -14,8 +14,11 @@ import json
 from pathlib import Path
 import queue
 import struct
+import sys
 import threading
 import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import aiohttp
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory

@@ -2,6 +2,10 @@
 
 2026-09-03。完整矩阵见[协议审查](docs/PROTOCOL_AUDIT.md)，测量见[验收报告](docs/ACCEPTANCE.md)。
 
+**当前网络状态（2026-09-03）**：PC通过`ADAM_5G` Wi-Fi DHCP在`192.168.1.0/23`网段（观测地址`192.168.1.219`）接入交换机；RK3566的PC可达地址为`192.168.1.179`。生产网关已使用`tcp/192.168.1.179:7448`和`tcp/192.168.1.179:7447`，两路TCP均已建立。图像为1920x1080 JPEG、实测约9.69Hz且healthy；7447只证明Zenoh连接可达，板内雷达采集仍无有效帧，按用户指示暂不改动。`192.168.0.250`仅保留为雷达UDP源/历史别名，不能再作为PC端endpoint。
+
+**Zenoh QoS 审查结论**：已使用项目实际 zenoh-pico 1.10.0 API完成显式配置并部署。C运行时探针确认 image/pointcloud 为Drop/Data(5)/BestEffort，config_file为Block/Data(5)/Reliable；cmd的queryable/reply API不能逐条设QoS，实际请求显式Block/Data，库内部reply固定Reliable+Block并继承请求QoS。协议RealTime(6)按语义映射为库RealTime(1)，因为库值6是DataLow。另发现1.10.0分片构造把Reliable=0/BestEffort=1布尔反转；未修改vendor，而对必然分片的正式图像/点云做了有日志、经线上样本验证的版本专用补偿。115秒JPEG 1149帧9.991512Hz、点云576帧5.002660Hz，解析/seq/stamp/JPEG错误0；完整19项结论见[QoS验收报告](docs/ZENOH_QOS_20260903.md)。
+
 **新雷达12小时审查结论**：旧雷达已由用户确认为硬件故障并更换，新XT-M60 SN为`XTM60B20250324000324`。关闭独占TCP7787的`Toffuture.exe`后，板端正确读回UDP目标`192.168.0.250:7687`。12小时Zenoh点云216007帧5.000167Hz，直接链路最大324.174ms、无500ms停顿；Foxglove同为216007帧5.000164Hz，最大672.119ms且11次超过500ms，但内部内容215996帧比对不一致0。图像424137帧9.817982Hz，最大512.964ms、7次超过500ms。全部Protobuf/JPEG/seq/timestamp/队列错误为0，板端recovery与发布错误为0。结论是点云5Hz与协议连续性通过，相机格式/内容通过但平均值未严格达到10Hz。详见[12小时稳定性报告](docs/STABILITY_12H_20260903.md)。
 
 **2026-09-01相机覆盖结论**：JPEG/H264双格式已按甲方最新枚举确认实现并部署。setting 0/1/2分别是不修改/H264/JPEG，发布format严格为3/2；H264来自MC800S原生1920x1080 MainStream，经ffmpeg `-c:v copy`和Annex-B access-unit解析，不解码/重编码。JPEG1000帧9.939858Hz，H264三分钟1800帧10.010749Hz，解析/格式/seq/timestamp错误0；解码文件从首个IDR起1781/1781帧通过标准FFmpeg。两格式整板重启持久化通过。相机专用重启fd继承问题已修，隔离切换时xt_radar PID与7447归属不变。详细证据见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。当前留在JPEG，PC生产网关仍只显示JPEG；雷达源无有效帧，点云数据连续性未随本任务复验。

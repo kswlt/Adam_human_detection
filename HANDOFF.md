@@ -2,6 +2,10 @@
 
 最后更新：2026-09-03，Windows工作目录`C:\Users\Admin\Desktop\yunke`。
 
+**2026-09-03 当前网络拓扑（交换机 + ADAM_5G）**：PC经 Wi-Fi `ADAM_5G` DHCP 接入 `192.168.1.0/23`（本次观测为`192.168.1.219`，未保留任何手工静态 Wi-Fi 地址）；ADAM_5G AP和RK3566 eth0接同一交换机。PC访问板端及Zenoh应使用`192.168.1.179`，即图像`tcp/192.168.1.179:7448`、点云`tcp/192.168.1.179:7447`，已验证两条TCP会话建立。PC配置`config/pc.json`及`YunKeAutostart`网关已切换到这两个端点；图像实际健康，原生1920x1080 JPEG约9.69Hz。`192.168.0.250`仍是板端历史别名/雷达UDP源地址，不再是这个拓扑下PC的Zenoh管理地址。雷达板内采集仍按旧`eth1/.250`来源配置而无有效帧；用户要求暂不处理，不能把7447 TCP已连通误报为点云正在产生。
+
+**2026-09-03 Zenoh QoS 已部署并实测**：正式 image/pointcloud 线上样本均为 Drop/Data(5)/BestEffort，config_file 为 Block/Data(5)/Reliable；cmd 请求/回复实测 Block/Data，1.10.0 内部可靠传输。协议 RealTime(6) 与库枚举不一致，实际语义枚举为 RealTime(1)。发现 zenoh-pico 1.10.0 分片 reliability 枚举反转缺陷，在不修改 vendor 的约束下仅对必然分片的完整 JPEG/点云做应用层补偿，并由 C sample API 验证。115秒回归：JPEG 1149帧9.991512Hz、点云576帧5.002660Hz，协议/解码/seq/stamp错误0；config_file 与板端磁盘字节哈希一致。当前二进制 `xt_camera=2cf3923b...d7f5`、`xt_radar=ba2ba9b1...b49`，详见[QoS验收报告](docs/ZENOH_QOS_20260903.md)。
+
 **2026-09-03新雷达12小时覆盖结论**：用户确认旧雷达为硬件故障并更换XT-M60，新设备SN为`XTM60B20250324000324`。初次接入无流不是驱动故障：PC实体网卡曾丢失`.200/24`，且`Toffuture.exe`独占TCP7787；恢复持久静态地址、关闭厂家GUI并只重启`xt_radar`后，通信测试、内参、SN、UDP目标回读及测量全部成功。随后连续12小时Zenoh点云216007帧5.000167Hz，seq/stamp/解析错误0、直接链路无500ms停顿；Foxglove同为216007帧5.000164Hz、内容不一致0。图像424137帧9.817982Hz，协议/JPEG/seq/stamp错误0，但严格10Hz不通过。板端全程recovery/queue_drop/expired/put_errors均为0。完整结论见[12小时稳定性报告](docs/STABILITY_12H_20260903.md)。厂家GUI与板端雷达控制不能同时运行。
 
 **2026-09-01相机双格式已部署**：甲方最新确认`SettingRequest.image_format`为0不修改、1 H264、2 JPEG；实际`ImageMsg.format`分别为3和2。MC800S MainStream实测为原生H264 High 1920x1080/10Hz/4096kbps/GOP20，板端使用RTSP/TCP加ffmpeg `-c:v copy`，一条消息一个Annex-B access unit；JPEG仍是原生snapshot完整文件。H264 1800帧3分钟10.010749Hz、JPEG1000帧9.939858Hz，均零协议错误/seq缺口，H264从首个IDR起1781帧被标准解码器全部解码。JPEG/H264分别做过整板重启持久化。完整证据和风险见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。

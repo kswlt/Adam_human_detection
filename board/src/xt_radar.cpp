@@ -43,6 +43,7 @@
 
 #include "zenoh-pico.h"
 #include "zenoh_config.hpp"
+#include "zenoh_qos.hpp"
 #include "request_parser.hpp"
 #include "publish_queue.hpp"
 
@@ -738,6 +739,8 @@ static void file_query_handler(z_loaned_query_t *query, void *) {
     if (!g_files_payload.empty()) {
         z_owned_bytes_t payload;
         z_bytes_copy_from_buf(&payload, g_files_payload.data(), g_files_payload.size());
+        // zenoh-pico 1.10 ignores reply congestion/priority options and inherits them from the query.
+        // Its reply transport is always Reliable + Block, so there is no effective per-reply override here.
         z_query_reply(query, z_query_keyexpr(query), z_move(payload), NULL);
     }
     g_files_requested = true;
@@ -898,6 +901,7 @@ static void query_handler(z_loaned_query_t *query, void *arg) {
     enc_error(w, code, desc);
     z_owned_bytes_t reply;
     z_bytes_copy_from_buf(&reply, w.buf.data(), w.buf.size());
+    // QoS is inherited from the query; zenoh-pico sends replies with Reliable + Block transport.
     int result = z_query_reply(query, qk, z_move(reply), NULL);
     if (restart_camera && code == 0 && result == Z_OK) {
         std::thread([] {
@@ -962,19 +966,27 @@ int main(int argc, char **argv) {
     snprintf(key, sizeof key, "active/%s/pointcloud", g_sn.c_str());
     z_owned_keyexpr_t ke_pc;
     z_keyexpr_from_str(&ke_pc, key);
-    if (z_declare_publisher(z_loan(g_zs), &g_pub_pc, z_loan(ke_pc), NULL) != Z_OK) {
+    auto pointcloud_qos = xt::fragmented_sensor_data_qos();
+    if (z_declare_publisher(z_loan(g_zs), &g_pub_pc, z_loan(ke_pc), &pointcloud_qos) != Z_OK) {
         printf("[zenoh] 点云发布者失败\n"); return 1;
     }
+    xt::log_fragmented_sensor_qos(key, pointcloud_qos);
     snprintf(key, sizeof key, "active/%s/pointcloud_preview", g_sn.c_str());
     z_owned_keyexpr_t ke_pc_preview;
     z_keyexpr_from_str(&ke_pc_preview, key);
-    if (z_declare_publisher(z_loan(g_zs), &g_pub_pc_preview, z_loan(ke_pc_preview), NULL) != Z_OK) {
+    auto preview_qos = xt::sensor_data_qos();
+    if (z_declare_publisher(z_loan(g_zs), &g_pub_pc_preview, z_loan(ke_pc_preview), &preview_qos) != Z_OK) {
         printf("[zenoh] 点云预览发布者失败\n"); return 1;
     }
+    xt::log_publisher_qos(key, preview_qos);
     snprintf(key, sizeof key, "active/%s/imu", g_sn.c_str());
     z_owned_keyexpr_t ke_imu;
     z_keyexpr_from_str(&ke_imu, key);
-    z_declare_publisher(z_loan(g_zs), &g_pub_imu, z_loan(ke_imu), NULL);
+    auto imu_qos = xt::realtime_sensor_qos();
+    if (z_declare_publisher(z_loan(g_zs), &g_pub_imu, z_loan(ke_imu), &imu_qos) != Z_OK) {
+        printf("[zenoh] IMU发布者失败\n"); return 1;
+    }
+    xt::log_publisher_qos(key, imu_qos);
     snprintf(key, sizeof key, "active/%s/cmd/*", g_sn.c_str());
     z_owned_keyexpr_t ke_cmd;
     z_keyexpr_from_str(&ke_cmd, key);
@@ -987,7 +999,9 @@ int main(int argc, char **argv) {
     snprintf(key, sizeof key, "active/%s/config_file", g_sn.c_str());
     z_owned_keyexpr_t ke_files;
     z_keyexpr_from_str(&ke_files, key);
-    if (z_declare_publisher(z_loan(g_zs), &g_pub_files, z_loan(ke_files), NULL) != Z_OK) return 1;
+    auto config_file_qos = xt::reliable_data_qos();
+    if (z_declare_publisher(z_loan(g_zs), &g_pub_files, z_loan(ke_files), &config_file_qos) != Z_OK) return 1;
+    xt::log_publisher_qos(key, config_file_qos);
     refresh_files();
     z_owned_closure_query_t files_cb;
     z_closure_query(&files_cb, file_query_handler, NULL, NULL);
