@@ -1,6 +1,8 @@
 # 当前交接入口
 
-最后更新：2026-08-31，Windows工作目录`C:\Users\Admin\Desktop\yunke`。
+最后更新：2026-09-03，Windows工作目录`C:\Users\Admin\Desktop\yunke`。
+
+**2026-09-03新雷达12小时覆盖结论**：用户确认旧雷达为硬件故障并更换XT-M60，新设备SN为`XTM60B20250324000324`。初次接入无流不是驱动故障：PC实体网卡曾丢失`.200/24`，且`Toffuture.exe`独占TCP7787；恢复持久静态地址、关闭厂家GUI并只重启`xt_radar`后，通信测试、内参、SN、UDP目标回读及测量全部成功。随后连续12小时Zenoh点云216007帧5.000167Hz，seq/stamp/解析错误0、直接链路无500ms停顿；Foxglove同为216007帧5.000164Hz、内容不一致0。图像424137帧9.817982Hz，协议/JPEG/seq/stamp错误0，但严格10Hz不通过。板端全程recovery/queue_drop/expired/put_errors均为0。完整结论见[12小时稳定性报告](docs/STABILITY_12H_20260903.md)。厂家GUI与板端雷达控制不能同时运行。
 
 **2026-09-01相机双格式已部署**：甲方最新确认`SettingRequest.image_format`为0不修改、1 H264、2 JPEG；实际`ImageMsg.format`分别为3和2。MC800S MainStream实测为原生H264 High 1920x1080/10Hz/4096kbps/GOP20，板端使用RTSP/TCP加ffmpeg `-c:v copy`，一条消息一个Annex-B access unit；JPEG仍是原生snapshot完整文件。H264 1800帧3分钟10.010749Hz、JPEG1000帧9.939858Hz，均零协议错误/seq缺口，H264从首个IDR起1781帧被标准解码器全部解码。JPEG/H264分别做过整板重启持久化。完整证据和风险见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。
 

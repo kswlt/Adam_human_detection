@@ -1,6 +1,8 @@
 # 当前审查摘要
 
-2026-08-31。完整矩阵见[协议审查](docs/PROTOCOL_AUDIT.md)，测量见[验收报告](docs/ACCEPTANCE.md)。
+2026-09-03。完整矩阵见[协议审查](docs/PROTOCOL_AUDIT.md)，测量见[验收报告](docs/ACCEPTANCE.md)。
+
+**新雷达12小时审查结论**：旧雷达已由用户确认为硬件故障并更换，新XT-M60 SN为`XTM60B20250324000324`。关闭独占TCP7787的`Toffuture.exe`后，板端正确读回UDP目标`192.168.0.250:7687`。12小时Zenoh点云216007帧5.000167Hz，直接链路最大324.174ms、无500ms停顿；Foxglove同为216007帧5.000164Hz，最大672.119ms且11次超过500ms，但内部内容215996帧比对不一致0。图像424137帧9.817982Hz，最大512.964ms、7次超过500ms。全部Protobuf/JPEG/seq/timestamp/队列错误为0，板端recovery与发布错误为0。结论是点云5Hz与协议连续性通过，相机格式/内容通过但平均值未严格达到10Hz。详见[12小时稳定性报告](docs/STABILITY_12H_20260903.md)。
 
 **2026-09-01相机覆盖结论**：JPEG/H264双格式已按甲方最新枚举确认实现并部署。setting 0/1/2分别是不修改/H264/JPEG，发布format严格为3/2；H264来自MC800S原生1920x1080 MainStream，经ffmpeg `-c:v copy`和Annex-B access-unit解析，不解码/重编码。JPEG1000帧9.939858Hz，H264三分钟1800帧10.010749Hz，解析/格式/seq/timestamp错误0；解码文件从首个IDR起1781/1781帧通过标准FFmpeg。两格式整板重启持久化通过。相机专用重启fd继承问题已修，隔离切换时xt_radar PID与7447归属不变。详细证据见[相机双格式交付记录](docs/CAMERA_DUAL_FORMAT_20260901.md)。当前留在JPEG，PC生产网关仍只显示JPEG；雷达源无有效帧，点云数据连续性未随本任务复验。
 
