@@ -12,17 +12,25 @@ detector:
   model: models/yolo11n.pt
   # Keep partially occluded/distant people; only class=person is accepted by
   # the detector adapter, while temporal/face checks handle weak candidates.
-  confidence: 0.35
+  confidence: 0.28
   inference_size: 640
-  # Profiles for Windows GPU evaluation: fast=11n/640, balanced=11s/960,
+  # Profiles for Windows GPU evaluation: fast=11n/640, balanced=11s/1280,
   # quality=11s or 11m/960-1280. Production remains explicit below.
-  profile: fast
+  profile: balanced
   profiles:
     fast: {model: models/yolo11n.pt, inference_size: 640}
-    balanced: {model: models/yolo11s.pt, inference_size: 960}
+    balanced: {model: models/yolo11s.pt, inference_size: 1280}
     quality: {model: models/yolo11m.pt, inference_size: 1280}
   # Preserve the real-time 640 path. When few people are found, run one
   # rate-limited 960 pass and require temporal confirmation for weak boxes.
+  tiled:
+    enabled: true
+    grid: [2, 2]
+    overlap: 0.15
+    confidence: 0.12
+    inference_size: 640
+    interval_seconds: 4.0
+    nms_iou: 0.50
   adaptive:
     enabled: true
     trigger_person_count: 1
@@ -33,13 +41,18 @@ detector:
     nms_iou: 0.55
 tracker:
   type: bytetrack
-  track_buffer: 30
-  frame_rate: 20
+  track_buffer: 20
+  frame_rate: 4
+  track_high_thresh: 0.20
+  track_low_thresh: 0.08
+  new_track_thresh: 0.20
+  match_thresh: 0.90
   allow_simple_fallback: false
   confirmed_only: true
   confirm_hits: 2
   weak_confirm_hits: 4
   weak_confidence: 0.30
+  lost_display_seconds: 1.0
 face:
   enabled: true
   # 4K source contains small distant faces; 640 misses them.

@@ -45,7 +45,27 @@ class UltralyticsTracker:
         from .tracker import TrackState
         from ultralytics.engine.results import Boxes
 
-        rows = [[*d.bbox, float(d.confidence), float(d.class_id)] for d in detections if d.class_id == 0]
+        # Weak detections are allowed only to continue an existing track. They
+        # must never create a new track on their own.
+        def near_existing(box):
+            bx1, by1, bx2, by2 = box
+            bc=((bx1+bx2)/2, (by1+by2)/2)
+            for old in self.tracks.values():
+                if old.state == 'REMOVED':
+                    continue
+                ox1, oy1, ox2, oy2 = old.bbox
+                iw=max(ox2-ox1, 1.0); ih=max(oy2-oy1, 1.0)
+                expanded=(ox1-iw*.75, oy1-ih*.75, ox2+iw*.75, oy2+ih*.75)
+                if expanded[0] <= bc[0] <= expanded[2] and expanded[1] <= bc[1] <= expanded[3]:
+                    return True
+            return False
+        rows = []
+        for d in detections:
+            if d.class_id != 0:
+                continue
+            if float(d.confidence) < .45 and not near_existing(d.bbox):
+                continue
+            rows.append([*d.bbox, float(d.confidence), float(d.class_id)])
         if rows:
             data = torch.tensor(rows, dtype=torch.float32)
             # xyxy, confidence, class
@@ -66,10 +86,16 @@ class UltralyticsTracker:
             if tid not in self.seen_ids:
                 self.seen_ids.add(tid); self.new_track_times.append(timestamp)
             first_seen = previous.first_seen if previous else timestamp
+            velocity = previous.velocity if previous else (0.0, 0.0)
+            if previous:
+                dt=max(timestamp-previous.last_seen,1e-3)
+                old_c=previous.center; new_c=((x1+x2)/2,(y1+y2)/2)
+                raw=((new_c[0]-old_c[0])/dt,(new_c[1]-old_c[1])/dt)
+                velocity=(0.7*velocity[0]+0.3*raw[0],0.7*velocity[1]+0.3*raw[1])
             state = TrackState(tid, (x1, y1, x2, y2), first_seen, timestamp,
                                state="CONFIRMED", age=(previous.age + 1 if previous else 1),
                                hits=(previous.hits + 1 if previous else 1),
-                               detection_confidence=float(score))
+                               velocity=velocity, detection_confidence=float(score))
             self.tracks[tid] = state
             result.append(state)
         for tid, old in list(self.tracks.items()):
