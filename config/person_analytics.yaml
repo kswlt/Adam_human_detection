@@ -49,6 +49,19 @@ face:
   recognition_threshold: 0.45
   check_interval_unknown: 0.5
   check_interval_known: 3.0
+identity:
+  daily_clothing_consistency: true
+  daily_gallery_reset_hour: 4
+  reid_match_threshold: 0.78
+  reid_margin_threshold: 0.08
+  gallery_max_samples: 20
+reid:
+  enabled: true
+  model: models/osnet_x0_25.onnx
+  interval_seconds: 1.0
+worktime:
+  occlusion_grace_seconds: 20
+  session_break_seconds: 120
 trajectory:
   smoothing_alpha: 0.35
   history_seconds: 30
