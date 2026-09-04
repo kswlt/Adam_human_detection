@@ -1,0 +1,9 @@
+# Installed separately from the stable Gateway environment.
+opencv-python>=4.10
+numpy>=1.26
+ultralytics>=8.3
+# ORT 1.29 GPU is built for CUDA 13.x; extras install matching CUDA/cuDNN DLLs.
+onnxruntime-gpu[cuda,cudnn]==1.29.0
+insightface>=0.7
+PyYAML>=6.0
+aiohttp>=3.10

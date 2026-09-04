@@ -1,0 +1,37 @@
+# Optional analytics configuration. The stable gateway remains unchanged unless
+# analytics is explicitly started with this file.
+enabled: false
+runtime:
+  device: cuda:0
+  require_gpu: true
+  inference_max_width: 1920
+camera:
+  source: gateway
+  queue_size: 2
+detector:
+  model: models/yolo11n.pt
+  # Keep partially occluded/distant people; only class=person is accepted by
+  # the detector adapter, while temporal/face checks handle weak candidates.
+  confidence: 0.35
+  inference_size: 640
+tracker:
+  type: bytetrack
+  track_buffer: 30
+face:
+  enabled: true
+  # 4K source contains small distant faces; 640 misses them.
+  det_size: [1280, 1280]
+  recognition_threshold: 0.45
+  check_interval_unknown: 0.5
+  check_interval_known: 3.0
+trajectory:
+  history_seconds: 30
+  prediction_seconds: 3
+  prediction_steps: [0.5, 1.0, 1.5, 2.0, 3.0]
+  minimum_movement_pixels: 2.0
+session:
+  grace_seconds: 5.0
+  active_speed_pixels_per_second: 8.0
+zones: {}
+database:
+  path: runtime/person_analytics.db

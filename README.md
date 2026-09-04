@@ -1,5 +1,9 @@
 # 云科空间相机协议网关
 
+> GitHub 项目：`kswlt/Adam_human_detection`
+
+本仓库同时包含原有“云科空间相机协议网关”和新增的 PC 端人员检测/人脸识别旁路。交接、当前进展、已知问题和现场运行条件请先阅读 [详细开发交接文档](docs/DEVELOPMENT_HANDOFF.md)。
+
 2026-08-31 本机交付版。硬件：Rockchip RK3562、芯探 XT-M60、MC800S。
 
 **当前相机支持原生1080p JPEG/H264协议输出，最终运行JPEG；浏览器可看JPEG画面。雷达仍有独立现场异常，整体协议不能判为全部合格。**
@@ -28,6 +32,9 @@
 | [需求边界](docs/REQUIREMENTS.md) | 用户补充约束与协议歧义 |
 | [交接入口](HANDOFF.md) | 下一位开发者必读的当前状态 |
 | [审查摘要](CODEX_AUDIT.md) | 主要阻断项和证据索引 |
+| [人员分析架构](docs/PERSON_ANALYTICS_ARCHITECTURE.md) | 人员识别与定位旁路架构 |
+| [人员分析使用](docs/PERSON_ANALYTICS_USAGE.md) | 视频/Gateway 启动方式 |
+| [详细开发交接](docs/DEVELOPMENT_HANDOFF.md) | 开发情景、当前进展、GPU环境、问题与后续工作 |
 
 ## 目录
 

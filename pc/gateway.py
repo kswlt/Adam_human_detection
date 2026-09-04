@@ -20,6 +20,7 @@ import zenoh
 
 from . import active_msgs_pb2 as pb
 from .recorder import RawRecorder
+from .person_analytics.capture import FramePacket
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG = logging.getLogger("yunke")
@@ -46,9 +47,10 @@ def zenoh_config(endpoint):
 
 
 class Source:
-    def __init__(self, kind, cfg, notify, recorder=None):
+    def __init__(self, kind, cfg, notify, recorder=None, frame_sink=None):
         self.kind, self.cfg, self.notify = kind, cfg, notify
         self.recorder = recorder
+        self.frame_sink = frame_sink
         self.topic = f"active/{cfg['sn']}/{kind}"
         self.endpoint = cfg[f"{kind}_endpoint"]
         self.lock = threading.Lock()
@@ -150,6 +152,18 @@ class Source:
             self.latest = dict(payload=payload, data=msg.data if self.kind == "image" else None,
                                frame_id=self.stats["forwarded"], seq=msg.header.seq,
                                received_mono=received_mono, wall_ns=wall_ns, **extra)
+            frame_packet = None
+            if self.kind == "image" and self.frame_sink is not None:
+                frame_packet = FramePacket(
+                    payload=bytes(msg.data), frame_id=self.stats["forwarded"],
+                    source_seq=msg.header.seq, received_mono=received_mono,
+                    received_wall_ns=wall_ns, width=msg.width, height=msg.height)
+        if frame_packet is not None:
+            try:
+                self.frame_sink.publish(frame_packet)
+            except Exception:
+                # Analytics is optional and must never take down the gateway.
+                LOG.exception("analytics frame sink failed")
         self.notify()
 
     def status(self):
@@ -182,7 +196,7 @@ class Source:
                         with self.lock:
                             age = time.monotonic() - self.last_rx
                         # A silent sensor is not a broken subscription. Zenoh restores its TCP links.
-                        if age > self.cfg["reconnect_seconds"] and not stale_reported:
+                        if age >= self.cfg["reconnect_seconds"] and not stale_reported:
                             stale_reported = True
                             with self.lock:
                                 self.stats["stale_events"] += 1
