@@ -3,9 +3,7 @@
 runtime/
 data/face_db/*.json
 data/*
-!data/persons/.gitkeep
 models/*
-!models/README.md
 __pycache__/
 *.pyc
 models/*.pt
