@@ -2,8 +2,10 @@
 .venv_ai/
 runtime/
 data/face_db/*.json
-data/persons/*
+data/*
 !data/persons/.gitkeep
+models/*
+!models/README.md
 __pycache__/
 *.pyc
 models/*.pt
