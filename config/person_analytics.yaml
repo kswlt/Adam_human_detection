@@ -14,19 +14,46 @@ detector:
   # the detector adapter, while temporal/face checks handle weak candidates.
   confidence: 0.35
   inference_size: 640
+  # Profiles for Windows GPU evaluation: fast=11n/640, balanced=11s/960,
+  # quality=11s or 11m/960-1280. Production remains explicit below.
+  profile: fast
+  profiles:
+    fast: {model: models/yolo11n.pt, inference_size: 640}
+    balanced: {model: models/yolo11s.pt, inference_size: 960}
+    quality: {model: models/yolo11m.pt, inference_size: 1280}
+  # Preserve the real-time 640 path. When few people are found, run one
+  # rate-limited 960 pass and require temporal confirmation for weak boxes.
+  adaptive:
+    enabled: true
+    trigger_person_count: 1
+    trigger_max_confidence: 0.55
+    secondary_inference_size: 960
+    secondary_confidence: 0.15
+    min_interval_seconds: 0.5
+    nms_iou: 0.55
 tracker:
   type: bytetrack
   track_buffer: 30
+  frame_rate: 20
+  allow_simple_fallback: false
+  confirmed_only: true
+  confirm_hits: 2
+  weak_confirm_hits: 4
+  weak_confidence: 0.30
 face:
   enabled: true
   # 4K source contains small distant faces; 640 misses them.
   det_size: [1280, 1280]
+  min_face_size: 24
+  min_det_score: 0.5
   recognition_threshold: 0.45
   check_interval_unknown: 0.5
   check_interval_known: 3.0
 trajectory:
+  smoothing_alpha: 0.35
   history_seconds: 30
   prediction_seconds: 3
+  display_history_seconds: 8
   prediction_steps: [0.5, 1.0, 1.5, 2.0, 3.0]
   minimum_movement_pixels: 2.0
 session:

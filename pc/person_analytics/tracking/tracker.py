@@ -20,6 +20,7 @@ class TrackState:
     velocity: tuple[float, float] = (0.0, 0.0)
     identity: object = None
     history: list = field(default_factory=list)
+    detection_confidence: float = 0.0
 
     @property
     def center(self):
@@ -39,8 +40,8 @@ def iou(a,b):
 
 class SimpleByteTracker:
     """Dependency-free ByteTrack-style IoU tracker for MVP/offline mode."""
-    def __init__(self, track_buffer=30, match_iou=0.25, confirm_hits=2):
-        self.track_buffer=track_buffer; self.match_iou=match_iou; self.confirm_hits=confirm_hits
+    def __init__(self, track_buffer=30, match_iou=0.25, confirm_hits=2, weak_confirm_hits=4, weak_confidence=.30):
+        self.track_buffer=track_buffer; self.match_iou=match_iou; self.confirm_hits=confirm_hits; self.weak_confirm_hits=weak_confirm_hits; self.weak_confidence=weak_confidence
         self.next_id=1; self.tracks={}
     def update(self, detections, timestamp):
         detections=[d for d in detections if d.class_id==0]
@@ -53,14 +54,15 @@ class SimpleByteTracker:
             t=self.tracks[tid]; old=t.center; t.bbox=detections[idx].bbox; new=t.center
             dt=max(1e-6,timestamp-t.last_seen); raw=((new[0]-old[0])/dt,(new[1]-old[1])/dt)
             t.velocity=(0.7*t.velocity[0]+0.3*raw[0],0.7*t.velocity[1]+0.3*raw[1])
-            t.last_seen=timestamp; t.age+=1; t.hits+=1; t.state="CONFIRMED" if t.hits>=self.confirm_hits else "TENTATIVE"
+            t.last_seen=timestamp; t.age+=1; t.hits+=1; t.detection_confidence=detections[idx].confidence
+            required=self.weak_confirm_hits if t.detection_confidence<self.weak_confidence else self.confirm_hits
+            t.state="CONFIRMED" if t.hits>=required else "TENTATIVE"
         for idx in unmatched:
             d=detections[idx]; tid=self.next_id; self.next_id+=1
-            self.tracks[tid]=TrackState(tid,d.bbox,timestamp,timestamp)
+            self.tracks[tid]=TrackState(tid,d.bbox,timestamp,timestamp,detection_confidence=d.confidence)
         for tid,t in list(self.tracks.items()):
             if t.last_seen < timestamp:
                 t.state="LOST"
                 if timestamp-t.last_seen>self.track_buffer/10:
                     t.state="REMOVED"; del self.tracks[tid]
         return [t for t in self.tracks.values() if t.state!="REMOVED"]
-

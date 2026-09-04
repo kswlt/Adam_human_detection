@@ -4,7 +4,7 @@ import argparse, asyncio, json, time, urllib.request, urllib.error, traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from .detection import PersonDetector
-from .tracking import SimpleByteTracker, TrajectoryHistory, ConstantVelocityPredictor
+from .tracking import SimpleByteTracker, UltralyticsTracker, TrajectoryHistory, ConstantVelocityPredictor
 from .analytics import Zone, point_zone, WorkTimeAnalyzer
 from .face import IdentityManager
 from .face import FaceDatabase, FaceRecognizer
@@ -22,10 +22,10 @@ def load_config(path):
         return {}
 
 class AnalyticsApp:
-    def __init__(self, source, detector=None, recognizer=None, writer=None, zones=(), face_interval_unknown=.5, face_interval_known=3.0, track_buffer=30, history_seconds=30, prediction_steps=None, minimum_movement=2.0, grace_seconds=5.0, inference_max_width=1920):
-        self.source=source; self.detector=detector or PersonDetector(); self.recognizer=recognizer; self.writer=writer; self.zones=tuple(zones); self.face_interval_unknown=face_interval_unknown; self.face_interval_known=face_interval_known; self.tracker=SimpleByteTracker(track_buffer); self.identity=IdentityManager(); self.predictor=ConstantVelocityPredictor(minimum_movement,prediction_steps); self.history_seconds=history_seconds; self.grace_seconds=grace_seconds; self.inference_max_width=inference_max_width; self.people={}; self.last_frame=b''; self.camera_times=[]; self.ai_times=[]; self.detector_times=[]; self.face_times=[]; self.latency_ms=0; self.dropped_frames=0; self.queue_size=0; self.face_futures={}; self.face_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='analytics-face') if recognizer is not None and hasattr(recognizer,'load') else None
-    def set_source_stats(self, queue_size=0, dropped_frames=0):
-        self.queue_size=queue_size; self.dropped_frames=dropped_frames
+    def __init__(self, source, detector=None, recognizer=None, writer=None, zones=(), face_interval_unknown=.5, face_interval_known=3.0, track_buffer=30, history_seconds=30, prediction_steps=None, minimum_movement=2.0, grace_seconds=5.0, inference_max_width=1920, confirmed_only=False, confirm_hits=2, weak_confirm_hits=4, weak_confidence=.30, tracker=None, display_history_seconds=8, smoothing_alpha=.35):
+        self.source=source; self.detector=detector or PersonDetector(); self.recognizer=recognizer; self.writer=writer; self.zones=tuple(zones); self.face_interval_unknown=face_interval_unknown; self.face_interval_known=face_interval_known; self.tracker=tracker or SimpleByteTracker(track_buffer,confirm_hits=confirm_hits,weak_confirm_hits=weak_confirm_hits,weak_confidence=weak_confidence); self.confirmed_only=confirmed_only; self.display_history_seconds=display_history_seconds; self.smoothing_alpha=smoothing_alpha; self.identity=IdentityManager(); self.predictor=ConstantVelocityPredictor(minimum_movement,prediction_steps); self.history_seconds=history_seconds; self.grace_seconds=grace_seconds; self.inference_max_width=inference_max_width; self.people={}; self.last_frame=b''; self.camera_times=[]; self.ai_times=[]; self.detector_times=[]; self.face_times=[]; self.latency_ms=0; self.dropped_frames=0; self.queue_size=0; self.source_stats={'healthy':False,'age_seconds':None,'last_error':None}; self.face_futures={}; self.face_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='analytics-face') if recognizer is not None and hasattr(recognizer,'load') else None
+    def set_source_stats(self, queue_size=0, dropped_frames=0, **source_stats):
+        self.queue_size=queue_size; self.dropped_frames=dropped_frames; self.source_stats.update(source_stats)
     def _recognize_job(self,image,bbox):
         started=time.perf_counter(); result=self.recognizer.recognize(image,bbox); return result,time.perf_counter()-started
     def _drain_face_results(self):
@@ -57,12 +57,14 @@ class AnalyticsApp:
             face_scale_x=face_scale_y=1.0/scale
             source_image=cv2.resize(source_image,(self.inference_max_width,int(source_image.shape[0]*scale)),interpolation=cv2.INTER_AREA)
         if self.face_executor:self._drain_face_results()
-        detector_started=time.perf_counter(); detections=self.detector.detect(source_image); self.detector_times.append(time.perf_counter()-detector_started); tracks=self.tracker.update(detections,timestamp)
+        detector_started=time.perf_counter(); detections=self.detector.detect(source_image); self.detector_times.append(time.perf_counter()-detector_started); tracks=self.tracker.update(detections,timestamp,image=source_image) if isinstance(self.tracker,UltralyticsTracker) else self.tracker.update(detections,timestamp)
         active=[]
         for t in tracks:
             if t.last_seen != timestamp:
                 continue
-            person=self.people.setdefault(t.track_id,{'history':TrajectoryHistory(self.history_seconds),'work':WorkTimeAnalyzer(self.grace_seconds),'name':'Unknown','person_id':None,'confidence':0.0,'zone':None,'last_zone':None,'last_face':-1e9,'face_state':self.identity.unknown(t.track_id)})
+            if self.confirmed_only and t.state != 'CONFIRMED':
+                continue
+            person=self.people.setdefault(t.track_id,{'history':TrajectoryHistory(self.history_seconds,self.smoothing_alpha),'work':WorkTimeAnalyzer(self.grace_seconds),'name':'Unknown','person_id':None,'confidence':0.0,'zone':None,'last_zone':None,'last_face':-1e9,'face_state':self.identity.unknown(t.track_id)})
             interval=self.face_interval_known if person['person_id'] else self.face_interval_unknown
             if self.recognizer is not None and timestamp-person['last_face']>=interval:
                 if self.face_executor:
@@ -94,9 +96,10 @@ class AnalyticsApp:
             person['work'].observe(state.person_id,timestamp,person['zone'])
             if self.writer:
                 self.writer.submit((timestamp,state.person_id,t.track_id,t.foot_point[0],t.foot_point[1],None,None,person['zone']))
-            active.append({'name':person['name'],'person_id':state.person_id,'track_id':t.track_id,'confidence':state.confidence,'bbox':t.bbox,'zone':person['zone'],'visible_seconds':person['work'].seconds(state.person_id,'visible') if state.person_id else 0.0,'history':person['history'].as_list(),'predictions':self.predictor.predict(person['history'])})
+            active.append({'name':person['name'],'person_id':state.person_id,'track_id':t.track_id,'confidence':state.confidence,'detection_confidence':t.detection_confidence,'bbox':t.bbox,'zone':person['zone'],'visible_seconds':person['work'].seconds(state.person_id,'visible') if state.person_id else 0.0,'history':person['history'].as_list(),'predictions':self.predictor.predict(person['history'])})
         for person in self.people.values(): person['work'].close_expired(timestamp)
-        self.last_frame=self._render(source_image,tracks); self.camera_times.append(timestamp); self.ai_times.append(time.perf_counter())
+        visible_tracks=[track for track in tracks if not self.confirmed_only or track.state=='CONFIRMED']
+        self.last_frame=self._jpeg(source_image); self.camera_times.append(timestamp); self.ai_times.append(time.perf_counter())
         self.camera_times=self.camera_times[-30:]; self.ai_times=self.ai_times[-30:]; self.detector_times=self.detector_times[-30:]; self.face_times=self.face_times[-30:]; self.latency_ms=(time.perf_counter()-started)*1000
         return active
     def _render(self,image,tracks):
@@ -118,7 +121,10 @@ class AnalyticsApp:
         ok,data=cv2.imencode('.jpg',image); return data.tobytes() if ok else b''
     def status(self):
         def hz(ts): return (len(ts)-1)/(ts[-1]-ts[0]) if len(ts)>1 and ts[-1]>ts[0] else 0.0
-        return {'camera_fps':hz(self.camera_times),'ai_fps':hz(self.ai_times),'detection_fps':1000/sum(self.detector_times)/len(self.detector_times) if self.detector_times and sum(self.detector_times)>0 else 0.0,'face_fps':len(self.face_times)/sum(self.face_times) if self.face_times and sum(self.face_times)>0 else 0.0,'latency_ms':self.latency_ms,'queue_size':self.queue_size,'dropped_frames':self.dropped_frames,'detector_device':getattr(self.detector,'actual_device',getattr(self.detector,'device',None)),'insightface_provider':getattr(self.recognizer,'provider',None),'face_diagnostics':getattr(self.recognizer,'last_diagnostics',None),'people':[{'name':x['name'],'person_id':x['person_id'],'track_id':i,'confidence':x['confidence'],'zone':x['zone'],'visible_seconds':x['work'].seconds(x['person_id'],'visible') if x['person_id'] else 0.0,'history':x['history'].as_list(),'predictions':self.predictor.predict(x['history'])} for i,x in self.people.items()]}
+        cutoff=time.time()-self.display_history_seconds
+        people=[{'name':x['name'],'person_id':x['person_id'],'track_id':i,'confidence':x['confidence'],'zone':x['zone'],'visible_seconds':x['work'].seconds(x['person_id'],'visible') if x['person_id'] else 0.0,'history':[p for p in x['history'].as_list() if p[0]>=cutoff],'predictions':self.predictor.predict(x['history'])} for i,x in self.people.items() if not self.confirmed_only or getattr(self.tracker.tracks.get(i),'state',None)=='CONFIRMED']
+        tracker_diag=self.tracker.diagnostics() if hasattr(self.tracker,'diagnostics') else {}
+        return {'camera_fps':hz(self.camera_times),'ai_fps':hz(self.ai_times),'detection_fps':1000/sum(self.detector_times)/len(self.detector_times) if self.detector_times and sum(self.detector_times)>0 else 0.0,'face_fps':len(self.face_times)/sum(self.face_times) if self.face_times and sum(self.face_times)>0 else 0.0,'latency_ms':self.latency_ms,'queue_size':self.queue_size,'dropped_frames':self.dropped_frames,'input':self.source_stats,'detector_device':getattr(self.detector,'actual_device',getattr(self.detector,'device',None)),'detector_diagnostics':getattr(self.detector,'last_diagnostics',None),'tracker_diagnostics':tracker_diag,'tracker_type':getattr(self.tracker,'tracker_type','simple'),'tracker_backend':getattr(self.tracker,'backend_name','local.simple_iou'),'insightface_provider':getattr(self.recognizer,'provider',None),'face_diagnostics':getattr(self.recognizer,'last_diagnostics',None),'face_database':getattr(getattr(self.recognizer,'database',None),'last_scan',None),'people':people}
     def close(self, timestamp=None):
         if self.face_executor:
             self.face_executor.shutdown(wait=True,cancel_futures=False); self._drain_face_results()
@@ -143,29 +149,39 @@ async def run_app(a):
     face_cfg=cfg.get('face',{})
     try:
         db=FaceDatabase('data/persons'); db.scan();
-        if db.records and face_cfg.get('enabled',True): recognizer=FaceRecognizer(db,threshold=face_cfg.get('recognition_threshold',.45),det_size=face_cfg.get('det_size',[1280,1280]))
+        if db.records and face_cfg.get('enabled',True): recognizer=FaceRecognizer(db,threshold=face_cfg.get('recognition_threshold',.45),det_size=face_cfg.get('det_size',[1280,1280]),min_face_size=face_cfg.get('min_face_size',24),min_det_score=face_cfg.get('min_det_score',.5))
     except Exception:
         traceback.print_exc()
         raise
     database=AnalyticsDatabase(cfg.get('database',{}).get('path','runtime/person_analytics.db')); writer=BatchWriter(database); writer.thread.start()
-    detector_cfg=cfg.get('detector',{}); model=detector_cfg.get('model',a.model); confidence=detector_cfg.get('confidence',.5); inference_size=detector_cfg.get('inference_size',640); tracker_cfg=cfg.get('tracker',{}); trajectory_cfg=cfg.get('trajectory',{}); session_cfg=cfg.get('session',{})
+    detector_cfg=cfg.get('detector',{}); profile=detector_cfg.get('profiles',{}).get(detector_cfg.get('profile',''),{}); model=profile.get('model',detector_cfg.get('model',a.model)); confidence=detector_cfg.get('confidence',.5); inference_size=profile.get('inference_size',detector_cfg.get('inference_size',640)); tracker_cfg=cfg.get('tracker',{}); trajectory_cfg=cfg.get('trajectory',{}); session_cfg=cfg.get('session',{})
+    tracker_type=tracker_cfg.get('type','bytetrack').lower()
+    try:
+        tracker=UltralyticsTracker(tracker_type=tracker_type,track_buffer=tracker_cfg.get('track_buffer',30),frame_rate=tracker_cfg.get('frame_rate',20),high_thresh=tracker_cfg.get('track_high_thresh',.25),low_thresh=tracker_cfg.get('track_low_thresh',.1),new_track_thresh=tracker_cfg.get('new_track_thresh',.25),match_thresh=tracker_cfg.get('match_thresh',.8),fuse_score=tracker_cfg.get('fuse_score',True))
+    except Exception:
+        if tracker_cfg.get('allow_simple_fallback',False):
+            traceback.print_exc(); tracker=None
+        else: raise
     zones=[]
     for zone_id,zone_cfg in cfg.get('zones',{}).items():
         polygon=tuple(tuple(p) for p in zone_cfg.get('polygon',[]))
         if len(polygon)>=3: zones.append(Zone(zone_id,zone_cfg.get('name',zone_id),polygon))
-    app=AnalyticsApp(a.source,PersonDetector(model,confidence,device=runtime_cfg.get('device','cuda:0'),inference_size=inference_size),recognizer,writer,zones,face_cfg.get('check_interval_unknown',.5),face_cfg.get('check_interval_known',3.0),tracker_cfg.get('track_buffer',30),trajectory_cfg.get('history_seconds',30),trajectory_cfg.get('prediction_steps'),trajectory_cfg.get('minimum_movement_pixels',2.0),session_cfg.get('grace_seconds',5.0),runtime_cfg.get('inference_max_width',1920))
+    app=AnalyticsApp(a.source,PersonDetector(model,confidence,device=runtime_cfg.get('device','cuda:0'),inference_size=inference_size,adaptive=detector_cfg.get('adaptive',{})),recognizer,writer,zones,face_cfg.get('check_interval_unknown',.5),face_cfg.get('check_interval_known',3.0),tracker_cfg.get('track_buffer',30),trajectory_cfg.get('storage_history_seconds',trajectory_cfg.get('history_seconds',30)),trajectory_cfg.get('prediction_steps'),trajectory_cfg.get('minimum_movement_pixels',2.0),session_cfg.get('grace_seconds',5.0),runtime_cfg.get('inference_max_width',1920),tracker_cfg.get('confirmed_only',True),tracker_cfg.get('confirm_hits',2),tracker_cfg.get('weak_confirm_hits',4),tracker_cfg.get('weak_confidence',.30),tracker=tracker,display_history_seconds=trajectory_cfg.get('display_history_seconds',8),smoothing_alpha=trajectory_cfg.get('smoothing_alpha',.35))
     async def index(_):
         zone_data=[{'name':z.name,'polygon':z.polygon} for z in zones]
         page=HTML.replace('<script>async function tick()', '<script>const m=document.getElementById("m"),v=document.getElementById("v"),p=document.getElementById("p"),d=document.getElementById("d");const zones='+json.dumps(zone_data,ensure_ascii=False)+';async function tick()')
         page=page.replace('c.drawImage(im,0,0);', "c.drawImage(im,0,0);zones.forEach(z=>{c.strokeStyle='#ffdd00';c.lineWidth=3;c.beginPath();z.polygon.forEach((q,i)=>i?c.lineTo(q[0],q[1]):c.moveTo(q[0],q[1]));c.closePath();c.stroke();c.fillStyle='#ffdd00';c.font='20px sans-serif';c.fillText(z.name,z.polygon[0][0],z.polygon[0][1]);});")
-        page=page.replace('Camera FPS ${s.camera_fps.toFixed(1)} | AI FPS ${s.ai_fps.toFixed(1)} | latency ${s.latency_ms.toFixed(1)}ms', 'Camera FPS ${s.camera_fps.toFixed(1)} | AI FPS ${s.ai_fps.toFixed(1)} | Face FPS ${s.face_fps.toFixed(1)} | latency ${s.latency_ms.toFixed(1)}ms | dropped ${s.dropped_frames}')
+        page=page.replace('Camera FPS ${s.camera_fps.toFixed(1)} | AI FPS ${s.ai_fps.toFixed(1)} | latency ${s.latency_ms.toFixed(1)}ms', 'Camera FPS ${s.camera_fps.toFixed(1)} | AI FPS ${s.ai_fps.toFixed(1)} | Face FPS ${s.face_fps.toFixed(1)} | latency ${s.latency_ms.toFixed(1)}ms | dropped ${s.dropped_frames} | input ${s.input.healthy ? "live" : "waiting"}${s.input.last_error ? " ("+s.input.last_error+")" : ""}')
         page=page.replace('async function tick(){', 'let busy=false;async function tick(){if(busy)return;busy=true;try{')
         page=page.replace('}setInterval(tick,500);tick()', '}finally{busy=false}}setInterval(tick,100);tick()')
         name_token='$'+'{x.name}'
         page=page.replace('<td>'+name_token+'</td>', "<td><a href='/analytics/person/"+'$'+"{encodeURIComponent(x.person_id||'')}'>"+name_token+"</a></td>")
         return web.Response(text=page,content_type='text/html')
     async def status(_): return web.json_response(app.status())
-    async def frame(_): return web.Response(body=app.last_frame or b'',content_type='image/jpeg')
+    async def frame(_):
+        if not app.last_frame:
+            raise web.HTTPServiceUnavailable(text='Waiting for a current Gateway frame')
+        return web.Response(body=app.last_frame,content_type='image/jpeg',headers={'Cache-Control':'no-store'})
     async def today(_):
         day=time.strftime('%Y-%m-%d'); rows=database.db.execute('SELECT person_id,metric,seconds FROM daily_statistics WHERE day=? ORDER BY person_id,metric',(day,)).fetchall()
         return web.json_response([{'person_id':p,'metric':m,'seconds':s} for p,m,s in rows])
@@ -212,8 +228,10 @@ async def run_app(a):
             try:
                 while True:
                     try: packet=gateway.get(1.0)
-                    except Empty: continue
-                    stats=gateway.stats(); app.set_source_stats(stats['queue_size'],stats['dropped']); app.process(packet.payload,packet.received_wall_ns/1e9)
+                    except Empty:
+                        app.set_source_stats(**gateway.stats())
+                        continue
+                    stats=gateway.stats(); app.set_source_stats(**stats); app.process(packet.payload,packet.received_wall_ns/1e9)
             finally: gateway.close()
         if a.source in ('video','image-dir'):
             while True: time.sleep(1)

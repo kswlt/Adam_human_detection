@@ -1,7 +1,7 @@
 class FaceRecognizer:
     """Optional InsightFace adapter; returns (person_id, cosine-like score) candidates."""
-    def __init__(self, database, threshold=.45, det_size=(1280,1280)):
-        self.database=database; self.threshold=threshold; self.det_size=tuple(det_size); self.app=None; self.provider='not_loaded'; self.last_diagnostics={'faces':0,'best_person':None,'best_score':0.0}
+    def __init__(self, database, threshold=.45, det_size=(1280,1280), min_face_size=24, min_det_score=.5):
+        self.database=database; self.threshold=threshold; self.det_size=tuple(det_size); self.min_face_size=float(min_face_size); self.min_det_score=float(min_det_score); self.app=None; self.provider='not_loaded'; self.last_diagnostics={'faces':0,'best_person':None,'best_score':0.0}
     def load(self):
         from insightface.app import FaceAnalysis
         from ..gpu import require_onnx_cuda
@@ -29,9 +29,17 @@ class FaceRecognizer:
         if not faces and bbox is not None:
             # A detector box can include a large body or clip a face at its edge.
             # Retry on the original 4K frame, then keep only faces belonging to it.
-            faces=[f for f in self.app.get(original) if expanded[0] <= (f.bbox[0]+f.bbox[2])/2 <= expanded[2] and expanded[1] <= (f.bbox[1]+f.bbox[3])/2 <= expanded[3]]
+            ox1,oy1,ox2,oy2=expanded
+            faces=[f for f in self.app.get(original) if ox1 <= (f.bbox[0]+f.bbox[2])/2 <= ox2 and oy1 <= (f.bbox[1]+f.bbox[3])/2 <= oy1+(oy2-oy1)*.72]
+        quality=[]
+        valid=[]
+        for face in faces:
+            fx1,fy1,fx2,fy2=map(float,face.bbox); size=min(fx2-fx1,fy2-fy1); score=float(getattr(face,'det_score',1.0))
+            item={'size':round(size,2),'det_score':round(score,4)}; quality.append(item)
+            if size >= self.min_face_size and score >= self.min_det_score: valid.append(face)
+        faces=valid
         if not faces:
-            self.last_diagnostics={'faces':0,'best_person':None,'best_score':0.0}; return []
+            self.last_diagnostics={'faces':0,'raw_faces':len(quality),'quality':quality,'best_person':None,'best_score':0.0}; return []
         result=[]
         best_person=None; best_score=0.0
         for face in faces:
@@ -41,5 +49,5 @@ class FaceRecognizer:
                 score=max(float(emb @ vector) for vector in vectors)
                 if score>best_score: best_person,best_score=person,score
                 if score>=self.threshold:result.append((person,score))
-        self.last_diagnostics={'faces':len(faces),'best_person':best_person,'best_score':best_score,'threshold':self.threshold}
+        self.last_diagnostics={'faces':len(faces),'raw_faces':len(quality),'quality':quality,'best_person':best_person,'best_score':best_score,'threshold':self.threshold}
         return sorted(result,key=lambda x:x[1],reverse=True)

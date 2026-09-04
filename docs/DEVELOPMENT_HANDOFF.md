@@ -75,6 +75,17 @@ GPU 运行链路已验证：
 - YOLO 人体阈值：当前配置为 `0.35`，用于保留远处/遮挡人员；此前 `0.60` 会漏掉部分低置信度真人。
 - 空椅子误检仍需进一步使用连续轨迹、静态目标和人脸证据做二次过滤，不能简单再次提高人体阈值，否则会重新漏掉远处人员。
 
+### 2026-09-04 重构进展
+
+- 生产默认 tracker 已从自写 `SimpleByteTracker` 切换为当前环境 Ultralytics 8.4.138 的官方 `BYTETracker`，实际状态接口显示 `tracker_backend=ultralytics.bytetrack`。
+- `track_buffer` 按明确的 `frame_rate` 解释，短时漏检可由官方 tracker 的 lost/refind 逻辑恢复原 ID；自写 tracker 仍保留给离线兼容测试。
+- YOLO 推理层已传递 `classes=[0]`，减少无关 COCO 类别处理。
+- 轨迹历史增加 raw 点和 EMA 平滑点；生产业务默认使用平滑点，预测不再使用原始抖动点。
+- 后端 `/frame.jpg` 返回原始 JPEG，网页 Canvas 作为唯一 overlay renderer，避免后端和前端重复绘框。
+- UI/API 默认只展示最近约 8 秒轨迹；数据库保存更长的存储历史。
+- 已新增官方 tracker 短时漏检恢复测试；当前全仓库 107 个 unittest 测试通过。
+- Windows 实机 benchmark 已执行当前 `yolo11n.pt`：YOLO 640/960/1280、InsightFace detection 和 ArcFace embedding。`yolo11s`/`yolo11m` 权重当前未下载，因此 balanced/quality 组合尚未伪造结果。
+
 ## 5. 运行方法
 
 首次安装：
