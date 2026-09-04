@@ -84,7 +84,7 @@ class AnalyticsApp:
             else: state=self.identity.unknown(t.track_id)
             if self.face_executor: state=person['face_state']
             t.identity=state
-            person['history'].add(timestamp,t.foot_point); person['name']=state.name; person['person_id']=state.person_id; person['confidence']=state.confidence
+            person['history'].add(timestamp,t.foot_point); person['name']=state.name; person['person_id']=state.person_id; person['confidence']=state.confidence; person['bbox']=list(t.bbox); person['detection_confidence']=t.detection_confidence
             zone=point_zone(t.foot_point,self.zones); person['zone']=zone.name if zone else None
             if self.writer:
                 if state.person_id: self.writer.submit(('__person__',state.person_id,state.name,timestamp))
@@ -122,7 +122,7 @@ class AnalyticsApp:
     def status(self):
         def hz(ts): return (len(ts)-1)/(ts[-1]-ts[0]) if len(ts)>1 and ts[-1]>ts[0] else 0.0
         cutoff=time.time()-self.display_history_seconds
-        people=[{'name':x['name'],'person_id':x['person_id'],'track_id':i,'confidence':x['confidence'],'zone':x['zone'],'visible_seconds':x['work'].seconds(x['person_id'],'visible') if x['person_id'] else 0.0,'history':[p for p in x['history'].as_list() if p[0]>=cutoff],'predictions':self.predictor.predict(x['history'])} for i,x in self.people.items() if not self.confirmed_only or getattr(self.tracker.tracks.get(i),'state',None)=='CONFIRMED']
+        people=[{'name':x['name'],'person_id':x['person_id'],'track_id':i,'confidence':x['confidence'],'detection_confidence':x.get('detection_confidence',0.0),'bbox':list(x['bbox']),'zone':x['zone'],'visible_seconds':x['work'].seconds(x['person_id'],'visible') if x['person_id'] else 0.0,'history':[p for p in x['history'].as_list() if p[0]>=cutoff],'predictions':self.predictor.predict(x['history'])} for i,x in self.people.items() if not self.confirmed_only or getattr(self.tracker.tracks.get(i),'state',None)=='CONFIRMED']
         tracker_diag=self.tracker.diagnostics() if hasattr(self.tracker,'diagnostics') else {}
         return {'camera_fps':hz(self.camera_times),'ai_fps':hz(self.ai_times),'detection_fps':1000/sum(self.detector_times)/len(self.detector_times) if self.detector_times and sum(self.detector_times)>0 else 0.0,'face_fps':len(self.face_times)/sum(self.face_times) if self.face_times and sum(self.face_times)>0 else 0.0,'latency_ms':self.latency_ms,'queue_size':self.queue_size,'dropped_frames':self.dropped_frames,'input':self.source_stats,'detector_device':getattr(self.detector,'actual_device',getattr(self.detector,'device',None)),'detector_diagnostics':getattr(self.detector,'last_diagnostics',None),'tracker_diagnostics':tracker_diag,'tracker_type':getattr(self.tracker,'tracker_type','simple'),'tracker_backend':getattr(self.tracker,'backend_name','local.simple_iou'),'insightface_provider':getattr(self.recognizer,'provider',None),'face_diagnostics':getattr(self.recognizer,'last_diagnostics',None),'face_database':getattr(getattr(self.recognizer,'database',None),'last_scan',None),'people':people}
     def close(self, timestamp=None):
