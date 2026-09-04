@@ -57,7 +57,9 @@ identity:
   gallery_max_samples: 20
 reid:
   enabled: true
-  model: models/osnet_x0_25.onnx
+  model: models/reid/osnet_x0_25_msmt17.pt
+  model_id: osnet_x0_25_msmt17_v1
+  require_gpu: true
   interval_seconds: 1.0
 worktime:
   occlusion_grace_seconds: 20

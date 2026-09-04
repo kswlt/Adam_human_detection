@@ -8,7 +8,7 @@
 - 同一已确认人脸在 tracker 换 ID 后会重新挂回原 GlobalPerson；未知目标也会被统计为合法 GlobalPerson。
 - `WorkTimeAnalyzer` 的共享实例按 GlobalPerson 复用，避免同一稳定身份因多个 track 产生重复工时；关闭时对共享实例去重。
 - `DailyAppearanceGallery` 实现了有限 gallery 及 `MATCHED / AMBIGUOUS / NEW` 拒绝匹配规则。
-- `AppearanceEncoder` 提供 ONNX body ReID 接口，但当前机器/仓库没有 `models/osnet_x0_25.onnx`，因此实时状态明确报告 `unavailable`，没有假装使用 ReID。
+- `AppearanceEncoder` 现在支持官方 BoxMOT `osnet_x0_25_msmt17.pt`（CUDA）和 ONNX 两种后端；当前机器/仓库尚未取得权重，因此实时状态明确报告 `unavailable`，没有假装使用 ReID。
 - analytics API 已输出 `raw_detection_count`、`tracker_output_count`、`confirmed_track_count`、`global_person_count`、`api_people_count` 和 ReID diagnostics，便于区分检测、跟踪、业务过滤和 UI 问题。
 
 ## 真实验证
