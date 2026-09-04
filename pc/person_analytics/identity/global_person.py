@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Optional
 import uuid
+import json
 
 
 @dataclass
@@ -79,3 +80,20 @@ class GlobalPersonManager:
         return {"active_global_persons": len(self.people), "daily_global_persons": len(self.people),
                 "track_recoveries": self.track_recoveries, "global_merge_count": self.merge_count,
                 "global_person_churn": len(self.people)}
+
+    def save(self, path):
+        payload = {"day": self.day, "next_number": self.next_number,
+                   "people": [p.__dict__ for p in self.people.values()],
+                   "track_to_global": self.track_to_global}
+        with open(path, "w", encoding="utf-8") as f: json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    def load(self, path):
+        try:
+            with open(path, "r", encoding="utf-8") as f: payload = json.load(f)
+            if payload.get("day") != self.day: return False
+            self.next_number = int(payload.get("next_number", 1)); self.people = {}
+            for raw in payload.get("people", []): self.people[raw["global_person_id"]] = GlobalPerson(**raw)
+            self.track_to_global = {int(k):v for k,v in payload.get("track_to_global", {}).items()}
+            return True
+        except (OSError, ValueError, TypeError, KeyError):
+            return False

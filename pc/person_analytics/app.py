@@ -181,6 +181,8 @@ async def run_app(a):
         polygon=tuple(tuple(p) for p in zone_cfg.get('polygon',[]))
         if len(polygon)>=3: zones.append(Zone(zone_id,zone_cfg.get('name',zone_id),polygon))
     app=AnalyticsApp(a.source,PersonDetector(model,confidence,device=runtime_cfg.get('device','cuda:0'),inference_size=inference_size,adaptive=detector_cfg.get('adaptive',{})),recognizer,writer,zones,face_cfg.get('check_interval_unknown',.5),face_cfg.get('check_interval_known',3.0),tracker_cfg.get('track_buffer',30),trajectory_cfg.get('storage_history_seconds',trajectory_cfg.get('history_seconds',30)),trajectory_cfg.get('prediction_steps'),trajectory_cfg.get('minimum_movement_pixels',2.0),session_cfg.get('grace_seconds',5.0),runtime_cfg.get('inference_max_width',1920),tracker_cfg.get('confirmed_only',True),tracker_cfg.get('confirm_hits',2),tracker_cfg.get('weak_confirm_hits',4),tracker_cfg.get('weak_confidence',.30),tracker=tracker,display_history_seconds=trajectory_cfg.get('display_history_seconds',8),smoothing_alpha=trajectory_cfg.get('smoothing_alpha',.35))
+    global_state_path=Path(cfg.get('database',{}).get('global_person_state','runtime/global_persons.json'))
+    app.global_identity.load(global_state_path)
     async def index(_):
         zone_data=[{'name':z.name,'polygon':z.polygon} for z in zones]
         page=HTML.replace('<script>async function tick()', '<script>const m=document.getElementById("m"),v=document.getElementById("v"),p=document.getElementById("p"),d=document.getElementById("d");const zones='+json.dumps(zone_data,ensure_ascii=False)+';async function tick()')
@@ -251,6 +253,11 @@ async def run_app(a):
             while True: time.sleep(1)
     try: await asyncio.to_thread(consume)
     finally:
+        try:
+            global_state_path.parent.mkdir(parents=True, exist_ok=True)
+            app.global_identity.save(global_state_path)
+        except OSError:
+            traceback.print_exc()
         app.close()
         writer.stop.set(); writer.thread.join(3); database.close(); await runner.cleanup()
 

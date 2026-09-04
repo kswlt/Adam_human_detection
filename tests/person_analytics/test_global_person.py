@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from pc.person_analytics.identity import GlobalPersonManager
 
@@ -17,3 +19,13 @@ class GlobalPersonTests(unittest.TestCase):
         person = manager.update(3, 1.0)
         self.assertTrue(person.global_person_id.startswith("DAY_20260904_"))
         self.assertEqual(person.name, "Unknown")
+
+    def test_same_day_state_restores(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "global.json"
+            manager = GlobalPersonManager(day="20260904")
+            manager.update(3, 1.0, SimpleNamespace(person_id="P001", name="张三", confidence=.9))
+            manager.save(path)
+            restored = GlobalPersonManager(day="20260904")
+            self.assertTrue(restored.load(path))
+            self.assertEqual(restored.people["DAY_20260904_0001"].known_person_id, "P001")
