@@ -25,7 +25,7 @@ def load_config(path):
 
 class AnalyticsApp:
     def __init__(self, source, detector=None, recognizer=None, writer=None, zones=(), face_interval_unknown=.5, face_interval_known=3.0, track_buffer=30, history_seconds=30, prediction_steps=None, minimum_movement=2.0, grace_seconds=5.0, inference_max_width=1920, confirmed_only=False, confirm_hits=2, weak_confirm_hits=4, weak_confidence=.30, tracker=None, display_history_seconds=8, smoothing_alpha=.35):
-        self.source=source; self.detector=detector or PersonDetector(); self.recognizer=recognizer; self.writer=writer; self.zones=tuple(zones); self.face_interval_unknown=face_interval_unknown; self.face_interval_known=face_interval_known; self.tracker=tracker or SimpleByteTracker(track_buffer,confirm_hits=confirm_hits,weak_confirm_hits=weak_confirm_hits,weak_confidence=weak_confidence); self.confirmed_only=confirmed_only; self.display_history_seconds=display_history_seconds; self.smoothing_alpha=smoothing_alpha; self.identity=IdentityManager(); self.global_identity=GlobalPersonManager(); self.reid=AppearanceEncoder(); self.gallery=DailyAppearanceGallery(); self.predictor=ConstantVelocityPredictor(minimum_movement,prediction_steps); self.history_seconds=history_seconds; self.grace_seconds=grace_seconds; self.inference_max_width=inference_max_width; self.people={}; self.work_by_global={}; self.last_frame=b''; self.camera_times=[]; self.ai_times=[]; self.detector_times=[]; self.face_times=[]; self.latency_ms=0; self.dropped_frames=0; self.queue_size=0; self.source_stats={'healthy':False,'age_seconds':None,'last_error':None}; self.face_futures={}; self.face_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='analytics-face') if recognizer is not None and hasattr(recognizer,'load') else None
+        self.source=source; self.detector=detector or PersonDetector(); self.recognizer=recognizer; self.writer=writer; self.zones=tuple(zones); self.face_interval_unknown=face_interval_unknown; self.face_interval_known=face_interval_known; self.tracker=tracker or SimpleByteTracker(track_buffer,confirm_hits=confirm_hits,weak_confirm_hits=weak_confirm_hits,weak_confidence=weak_confidence); self.confirmed_only=confirmed_only; self.display_history_seconds=display_history_seconds; self.smoothing_alpha=smoothing_alpha; self.identity=IdentityManager(); self.global_identity=GlobalPersonManager(); self.reid=AppearanceEncoder(); self.gallery=DailyAppearanceGallery(); self.last_reid={}; self.reid_match_count=0; self.reid_ambiguous_count=0; self.reid_new_count=0; self.reid_recovery_count=0; self.predictor=ConstantVelocityPredictor(minimum_movement,prediction_steps); self.history_seconds=history_seconds; self.grace_seconds=grace_seconds; self.inference_max_width=inference_max_width; self.people={}; self.work_by_global={}; self.last_frame=b''; self.camera_times=[]; self.ai_times=[]; self.detector_times=[]; self.face_times=[]; self.latency_ms=0; self.dropped_frames=0; self.queue_size=0; self.source_stats={'healthy':False,'age_seconds':None,'last_error':None}; self.face_futures={}; self.face_executor=ThreadPoolExecutor(max_workers=1,thread_name_prefix='analytics-face') if recognizer is not None and hasattr(recognizer,'load') else None
     def set_source_stats(self, queue_size=0, dropped_frames=0, **source_stats):
         self.queue_size=queue_size; self.dropped_frames=dropped_frames; self.source_stats.update(source_stats)
     def _recognize_job(self,image,bbox):
@@ -87,6 +87,17 @@ class AnalyticsApp:
             if self.face_executor: state=person['face_state']
             t.identity=state
             global_person=self.global_identity.update(t.track_id,timestamp,state)
+            if self.reid.available and timestamp-self.last_reid.get(t.track_id, -1e9) >= 1.0:
+                self.last_reid[t.track_id] = timestamp
+                embedding = self.reid.encode(source_image, t.bbox)
+                decision = self.gallery.match(embedding)
+                if decision['status'] == 'MATCHED':
+                    attached = self.global_identity.attach(t.track_id, decision['global_person_id'], timestamp)
+                    if attached is not None: global_person=attached; self.reid_match_count += 1; self.reid_recovery_count += 1
+                elif decision['status'] == 'AMBIGUOUS': self.reid_ambiguous_count += 1
+                else: self.reid_new_count += 1
+                if embedding is not None and (global_person.identity_status == 'confirmed' or global_person.current_track_id == t.track_id):
+                    self.gallery.add(global_person.global_person_id, embedding)
             person['work']=self.work_by_global.setdefault(global_person.global_person_id,person['work'])
             person['history'].add(timestamp,t.foot_point); person['name']=state.name; person['person_id']=state.person_id; person['confidence']=state.confidence; person['bbox']=list(t.bbox); person['detection_confidence']=t.detection_confidence
             person['global_person']=global_person
@@ -135,7 +146,7 @@ class AnalyticsApp:
         tracker_diag=self.tracker.diagnostics() if hasattr(self.tracker,'diagnostics') else {}
         detector_diag=getattr(self.detector,'last_diagnostics',None) or {}
         raw_count=int(detector_diag.get('primary_count',0))+int(detector_diag.get('secondary_count',0))
-        return {'camera_fps':hz(self.camera_times),'ai_fps':hz(self.ai_times),'detection_fps':1000/sum(self.detector_times)/len(self.detector_times) if self.detector_times and sum(self.detector_times)>0 else 0.0,'face_fps':len(self.face_times)/sum(self.face_times) if self.face_times and sum(self.face_times)>0 else 0.0,'latency_ms':self.latency_ms,'queue_size':self.queue_size,'dropped_frames':self.dropped_frames,'input':self.source_stats,'raw_detection_count':raw_count,'tracker_output_count':len(self.tracker.tracks),'confirmed_track_count':sum(1 for t in self.tracker.tracks.values() if getattr(t,'state',None)=='CONFIRMED'),'global_person_count':len(self.global_identity.people),'api_people_count':len(people),'detector_device':getattr(self.detector,'actual_device',getattr(self.detector,'device',None)),'detector_diagnostics':detector_diag,'tracker_diagnostics':tracker_diag,'tracker_type':getattr(self.tracker,'tracker_type','simple'),'tracker_backend':getattr(self.tracker,'backend_name','local.simple_iou'),'global_identity_diagnostics':self.global_identity.diagnostics(),'reid_diagnostics':self.reid.diagnostics(),'gallery_samples':sum(len(e.samples) for e in self.gallery.entries.values()),'insightface_provider':getattr(self.recognizer,'provider',None),'face_diagnostics':getattr(self.recognizer,'last_diagnostics',None),'face_database':getattr(getattr(self.recognizer,'database',None),'last_scan',None),'people':people}
+        return {'camera_fps':hz(self.camera_times),'ai_fps':hz(self.ai_times),'detection_fps':1000/sum(self.detector_times)/len(self.detector_times) if self.detector_times and sum(self.detector_times)>0 else 0.0,'face_fps':len(self.face_times)/sum(self.face_times) if self.face_times and sum(self.face_times)>0 else 0.0,'latency_ms':self.latency_ms,'queue_size':self.queue_size,'dropped_frames':self.dropped_frames,'input':self.source_stats,'raw_detection_count':raw_count,'tracker_output_count':len(self.tracker.tracks),'confirmed_track_count':sum(1 for t in self.tracker.tracks.values() if getattr(t,'state',None)=='CONFIRMED'),'global_person_count':len(self.global_identity.people),'api_people_count':len(people),'reid_match_count':self.reid_match_count,'reid_ambiguous_count':self.reid_ambiguous_count,'reid_new_count':self.reid_new_count,'reid_recovery_count':self.reid_recovery_count,'global_person_churn':len(self.global_identity.people),'detector_device':getattr(self.detector,'actual_device',getattr(self.detector,'device',None)),'detector_diagnostics':detector_diag,'tracker_diagnostics':tracker_diag,'tracker_type':getattr(self.tracker,'tracker_type','simple'),'tracker_backend':getattr(self.tracker,'backend_name','local.simple_iou'),'global_identity_diagnostics':self.global_identity.diagnostics(),'reid_diagnostics':self.reid.diagnostics(),'gallery_samples':sum(len(e.samples) for e in self.gallery.entries.values()),'insightface_provider':getattr(self.recognizer,'provider',None),'face_diagnostics':getattr(self.recognizer,'last_diagnostics',None),'face_database':getattr(getattr(self.recognizer,'database',None),'last_scan',None),'people':people}
     def close(self, timestamp=None):
         if self.face_executor:
             self.face_executor.shutdown(wait=True,cancel_futures=False); self._drain_face_results()
@@ -185,6 +196,8 @@ async def run_app(a):
     app.reid=AppearanceEncoder(reid_cfg.get('model','models/reid/osnet_x0_25_msmt17.pt'), device=runtime_cfg.get('device','cuda:0'), require_gpu=bool(reid_cfg.get('require_gpu',True)))
     global_state_path=Path(cfg.get('database',{}).get('global_person_state','runtime/global_persons.json'))
     app.global_identity.load(global_state_path)
+    gallery_state_path=Path(cfg.get('database',{}).get('reid_gallery_state','runtime/reid_gallery.json'))
+    app.gallery.load(gallery_state_path, reid_cfg.get('model_id','osnet_x0_25_msmt17_v1'))
     async def index(_):
         zone_data=[{'name':z.name,'polygon':z.polygon} for z in zones]
         page=HTML.replace('<script>async function tick()', '<script>const m=document.getElementById("m"),v=document.getElementById("v"),p=document.getElementById("p"),d=document.getElementById("d");const zones='+json.dumps(zone_data,ensure_ascii=False)+';async function tick()')
@@ -258,6 +271,7 @@ async def run_app(a):
         try:
             global_state_path.parent.mkdir(parents=True, exist_ok=True)
             app.global_identity.save(global_state_path)
+            app.gallery.save(gallery_state_path, reid_cfg.get('model_id','osnet_x0_25_msmt17_v1'))
         except OSError:
             traceback.print_exc()
         app.close()

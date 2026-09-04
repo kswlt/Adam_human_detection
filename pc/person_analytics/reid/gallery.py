@@ -2,6 +2,7 @@
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
+import json
 
 
 @dataclass
@@ -29,3 +30,16 @@ class DailyAppearanceGallery:
         scores.sort(reverse=True); best,gid=scores[0]; second=scores[1][0] if len(scores)>1 else 0.0; margin=best-second
         status="MATCHED" if best >= self.threshold and margin >= self.margin else ("AMBIGUOUS" if best >= self.threshold else "NEW")
         return {"status":status,"global_person_id":gid if status=="MATCHED" else None,"best":best,"second":second,"margin":margin}
+
+    def save(self, path, model_id="osnet_x0_25_msmt17_v1"):
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"model_id":model_id,"entries":{k:e.samples for k,e in self.entries.items()}}, f)
+
+    def load(self, path, model_id="osnet_x0_25_msmt17_v1"):
+        try:
+            with open(path, "r", encoding="utf-8") as f: payload=json.load(f)
+            if payload.get("model_id") != model_id: return False
+            for gid,samples in payload.get("entries",{}).items():
+                for sample in samples[:self.max_samples]: self.add(gid,sample)
+            return True
+        except (OSError, ValueError, TypeError): return False

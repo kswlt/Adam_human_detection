@@ -69,6 +69,19 @@ class GlobalPersonManager:
         person.identity_status, person.identity_source, person.confidence = "confirmed", "face", confidence
         return person
 
+    def attach(self, track_id, global_person_id, timestamp):
+        person = self.people.get(global_person_id)
+        if person is None: return None
+        # One physical camera must not bind two simultaneously visible tracks to one person.
+        if person.current_track_id not in (None, track_id) and timestamp - person.last_seen < 5.0:
+            return None
+        old = self.track_to_global.get(track_id)
+        if old != global_person_id: self.track_recoveries += 1
+        self.track_to_global[track_id] = global_person_id
+        if track_id not in person.track_ids: person.track_ids.append(track_id)
+        person.current_track_id, person.last_seen = track_id, timestamp
+        return person
+
     def snapshot(self):
         return [dict(global_person_id=p.global_person_id, known_person_id=p.known_person_id,
                      name=p.name, first_seen_today=p.first_seen_today, last_seen=p.last_seen,

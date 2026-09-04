@@ -77,3 +77,5 @@ session:
 zones: {}
 database:
   path: runtime/person_analytics.db
+  global_person_state: runtime/global_persons.json
+  reid_gallery_state: runtime/reid_gallery.json
